@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YT Embed Playlist - Example</title>
+    <style>
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08),
+                0 4px 12px rgba(0, 0, 0, 0.04);
+            transition: transform 0.4s cubic-bezier(0.25, 0.1, 0.25, 1),
+                box-shadow 0.4s ease-out;
+        }
+
+        .video-container::before {
+            content: "";
+            display: block;
+            padding-top: 56.25%;
+            /* 16:9 Aspect Ratio */
+        }
+
+        .video-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+            border-radius: 12px;
+        }
+
+        .video-container:hover {
+            transform: scale(1.02) translateY(-5px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1),
+                0 5px 15px rgba(0, 0, 0, 0.06);
+        }
+
+        .video-wrapper {
+            position: relative;
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            transition: max-height 0.5s ease, opacity 0.5s ease, margin 0.5s ease;
+            margin: 0;
+        }
+
+        .video-wrapper.visible {
+            max-height: 1000px;
+            /* Adjust based on video height */
+            opacity: 1;
+            margin: 20px 0;
+            overflow: visible;
+        }
+    </style>
+</head>
+
+<body>
+    <div style="width: 800px; margin: 0 auto">
+
+        <h2>Manual</h2>
+        <div id="manual">
+            <a href="https://www.youtube.com/watch?v=k98esvB9E40&list=PLRVWztDBSD_Jh0PwXtJ0wBP0TLtHga1_Y" data-yt-link
+                data-yt-target="gp1">Playlist 1</a> |
+            <a href="https://www.youtube.com/watch?v=XQyMvwo0KRY&list=PLiItfFtbus3CGvXuGH7vC4W97It1lymu3" data-yt-link
+                data-yt-target="gp1">Playlist 2</a>
+            <div id="gp1"></div>
+        </a>
+        </div>
+
+        <div id="scope2">
+            <h2>Shared playlist</h2>
+            <div class="video-container">
+                <iframe width="560" height="315"
+                    src="https://www.youtube.com/embed/videoseries?si=L-oUYx0Lbeagd0HT&amp;list=PLRVWztDBSD_Jh0PwXtJ0wBP0TLtHga1_Y"
+                    title="YouTube video player" frameborder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+            </div>
+
+            <h2>Dynamic</h2>
+            <div class="video-container">
+                <iframe allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowfullscreen="" frameborder="0" height="315"
+                    src="https://www.youtube.com/embed?playlist=at9-Gm1-MWQ,hyB__9470KU,Enevxnnn114,8gjDQdy7ysE,GgNTzHi4xtQ"
+                    title="YouTube video player" width="560">
+                </iframe>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- YouTube Links Plugin -->
+    <script src="https://cdn.jsdelivr.net/gh/romagny13/yt-link-player@1.13.0/dist/yt-link-player.min.js"></script>
+    <script src="../src/yt-playlist.js"></script>
+    <script>
+
+        const LIGHT_THEME = {
+            "font-family": "Roboto, Arial, sans-serif",
+
+            // Brand
+            "accent": "#ff0000",
+            "accent-playing": "#ff4444",
+
+            // Backgrounds
+            "bg": "#ffffff",
+            "bg-item-hover": "#f5f5f5",
+            "bg-item-active": "#ececec",
+            "bg-thumb": "#f3f3f3",
+
+            // Toggle button
+            // "bg-toggle": "rgba(255,255,255,0.92)",
+            // "bg-toggle-hover": "rgba(0,0,0,0.08)",
+
+            // Borders
+            "border": "#e5e5e5",
+            "border-item": "#f0f0f0",
+
+            // Text
+            "text-primary": "#0f0f0f",
+            "text-secondary": "#606060",
+
+            // Scrollbar
+            "scrollbar-thumb": "#c0c0c0"
+        };
+
+        const apiKey = "AIzaSyDGgMOJkyudMYOyKRoTqbFVpcTLJKvOk4M" ; //"YOUR API KEY";
+
+        const w1 = new YTPlaylist({
+            apiKey: apiKey,
+            scope: "#manual",
+            onError: (err, iframe) => console.warn("Iframe ignored", iframe, err),
+            onVideosFound: (videos) => {
+                console.log(videos);
+            }
+        });
+
+        const w2 = new YTPlaylist({
+            apiKey: apiKey,
+            scope: "#scope2",
+            theme: LIGHT_THEME,
+            onError: (err, iframe) => console.warn("Iframe ignored", iframe, err)
+        });
+
+        new YouTubeLinkPlayer({
+            rootContainer: "#manual",
+            showPreviewOnHover: true,
+            showOnInit: true,
+            onVideoShow: (container, link, videoId, group = null) => {
+                w1.scan();
+            },
+            onError: (error, link) => {
+                console.log(error);
+            }
+        });
+
+    </script>
+</body>
+
+</html>

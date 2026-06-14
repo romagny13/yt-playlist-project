@@ -1,85 +1,94 @@
 (function (root, factory) {
-    if (typeof define === "function" && define.amd) {
-        define([], factory);
-    } else if (typeof module === "object" && module.exports) {
-        module.exports = factory();
-    } else {
-        root.YTPlaylist = factory();
-    }
+  if (typeof define === "function" && define.amd) {
+    define([], factory);
+  } else if (typeof module === "object" && module.exports) {
+    module.exports = factory();
+  } else {
+    root.YTPlaylist = factory();
+  }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  class Logger {
+    static _enabled = true;
 
-    class Logger {
-        static _enabled = true;
-
-        static enable() { Logger._enabled = true; }
-        static disable() { Logger._enabled = false; }
-
-        static log(msg) { if (Logger._enabled) console.log(msg); }
-        static warn(msg) { if (Logger._enabled) console.warn(msg); }
-        static error(msg, err) { if (Logger._enabled) console.error(msg, err); }
+    static enable() {
+      Logger._enabled = true;
+    }
+    static disable() {
+      Logger._enabled = false;
     }
 
-    const Cache = {
-        TTL: 24 * 60 * 60 * 1000, // 24h ms
-        PREFIX: "ytp_",
+    static log(msg) {
+      if (Logger._enabled) console.log(msg);
+    }
+    static warn(msg) {
+      if (Logger._enabled) console.warn(msg);
+    }
+    static error(msg, err) {
+      if (Logger._enabled) console.error(msg, err);
+    }
+  }
 
-        _key(id) {
-            return `${this.PREFIX}${id}`;
-        },
+  const Cache = {
+    TTL: 24 * 60 * 60 * 1000, // 24h ms
+    PREFIX: "ytp_",
 
-        get(id) {
-            try {
-                const raw = localStorage.getItem(this._key(id));
-                if (!raw) return null;
-                const { data, expiresAt } = JSON.parse(raw);
-                if (Date.now() > expiresAt) {
-                    localStorage.removeItem(this._key(id));
-                    return null;
-                }
-                return data;
-            } catch {
-                return null;
-            }
-        },
+    _key(id) {
+      return `${this.PREFIX}${id}`;
+    },
 
-        set(id, data) {
-            try {
-                localStorage.setItem(
-                    this._key(id),
-                    JSON.stringify({ data, expiresAt: Date.now() + this.TTL })
-                );
-            } catch (e) {
-                // Quota
-                Logger.warn("[YTPlaylistWidget] Cache write failed:", e.message);
-            }
-        },
-    };
+    get(id) {
+      try {
+        const raw = localStorage.getItem(this._key(id));
+        if (!raw) return null;
+        const { data, expiresAt } = JSON.parse(raw);
+        if (Date.now() > expiresAt) {
+          localStorage.removeItem(this._key(id));
+          return null;
+        }
+        return data;
+      } catch {
+        return null;
+      }
+    },
 
-    // ---------------------------------------------------------------------------
-    // Default theme
-    // Only the values that actually vary across themes are extracted as variables.
-    // Structural / layout values (flex, display, overflow…) stay hard-coded in CSS.
-    // ---------------------------------------------------------------------------
+    set(id, data) {
+      try {
+        localStorage.setItem(
+          this._key(id),
+          JSON.stringify({ data, expiresAt: Date.now() + this.TTL })
+        );
+      } catch (e) {
+        // Quota
+        Logger.warn("[YTPlaylistWidget] Cache write failed:", e.message);
+      }
+    }
+  };
 
-    const DEFAULT_THEME = {
-        // --- Colors ---
-        "font-family": "Roboto, Arial, sans-serif",
-        "accent": "#ff0000",        // red bar on active item + header icon
-        "accent-playing": "#ff4444",        // "now playing" label & bars
-        "bg": "#0f0f0f",        // panel background
-        "bg-item-hover": "#1a1a1a",        // item hover
-        "bg-item-active": "#272727",        // active item
-        "bg-thumb": "#1a1a1a",        // thumbnail placeholder
-        "bg-toggle": "rgba(0,0,0,0.5)",        // toggle button default
-        "bg-toggle-hover": "rgba(255,255,255,0.15)", // toggle button hover / active
-        "border": "#272727",        // panel top border + header bottom border
-        "border-item": "#1a1a1a",        // item separator
-        "text-primary": "#ffffff",
-        "text-secondary": "#888888",
-        "scrollbar-thumb": "#444444",
-    };
+  // ---------------------------------------------------------------------------
+  // Default theme
+  // Only the values that actually vary across themes are extracted as variables.
+  // Structural / layout values (flex, display, overflow…) stay hard-coded in CSS.
+  // ---------------------------------------------------------------------------
 
-    const DEFAULT_CSS = `
+  const DEFAULT_THEME = {
+    // --- Colors ---
+    "font-family": "Roboto, Arial, sans-serif",
+    accent: "#ff0000", // red bar on active item + header icon
+    "accent-playing": "#ff4444", // "now playing" label & bars
+    bg: "#0f0f0f", // panel background
+    "bg-item-hover": "#1a1a1a", // item hover
+    "bg-item-active": "#272727", // active item
+    "bg-thumb": "#1a1a1a", // thumbnail placeholder
+    "bg-toggle": "rgba(0,0,0,0.5)", // toggle button default
+    "bg-toggle-hover": "rgba(255,255,255,0.15)", // toggle button hover / active
+    border: "#272727", // panel top border + header bottom border
+    "border-item": "#1a1a1a", // item separator
+    "text-primary": "#ffffff",
+    "text-secondary": "#888888",
+    "scrollbar-thumb": "#444444"
+  };
+
+  const DEFAULT_CSS = `
     .ytp-ext-wrapper { font-family: var(--ytp-font-family); }
     .ytp-ext-wrapper iframe { display: block; }
 
@@ -252,204 +261,218 @@
     }
     `;
 
-    // ---------------------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
 
-    function buildThemeVars(userTheme) {
-        const merged = Object.assign({}, DEFAULT_THEME, userTheme);
-        return Object.entries(merged)
-            .map(([k, v]) => `--ytp-${k}: ${v};`)
-            .join(" ");
+  function buildThemeVars(userTheme) {
+    const merged = Object.assign({}, DEFAULT_THEME, userTheme);
+    return Object.entries(merged)
+      .map(([k, v]) => `--ytp-${k}: ${v};`)
+      .join(" ");
+  }
+
+  function injectGlobalCSS(css, styleId) {
+    if (document.getElementById(styleId)) return;
+    const el = document.createElement("style");
+    el.id = styleId;
+    el.textContent = css;
+    document.head.appendChild(el);
+  }
+
+  // ---------------------------------------------------------------------------
+  // YouTube Data API helpers
+  // ---------------------------------------------------------------------------
+
+  async function fetchVideosByIds(ids, apiKey) {
+    const videos = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      const chunk = ids.slice(i, i + 50).join(",");
+      const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${chunk}&key=${apiKey}`;
+      const res = await fetch(url);
+      if (!res.ok)
+        throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      data.items?.forEach((v) => {
+        if (v.status?.privacyStatus !== "public") return;
+        videos.push({
+          id: v.id,
+          title: v.snippet.title,
+          channel: v.snippet.channelTitle || "",
+          thumb:
+            v.snippet.thumbnails?.medium?.url ||
+            v.snippet.thumbnails?.default?.url ||
+            ""
+        });
+      });
     }
+    return videos;
+  }
 
-    function injectGlobalCSS(css, styleId) {
-        if (document.getElementById(styleId)) return;
-        const el = document.createElement("style");
-        el.id = styleId;
-        el.textContent = css;
-        document.head.appendChild(el);
-    }
+  async function fetchPlaylistVideos(playlistId, apiKey) {
+    const raw = [];
+    let pageToken = "";
+    do {
+      const url =
+        `https://www.googleapis.com/youtube/v3/playlistItems?` +
+        `part=snippet&maxResults=50&playlistId=${playlistId}&pageToken=${pageToken}&key=${apiKey}`;
+      const res = await fetch(url);
+      if (!res.ok)
+        throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      data.items?.forEach((item) => {
+        const id = item.snippet.resourceId?.videoId;
+        if (id) raw.push(id);
+      });
+      pageToken = data.nextPageToken || "";
+    } while (pageToken);
 
-    // ---------------------------------------------------------------------------
-    // YouTube Data API helpers
-    // ---------------------------------------------------------------------------
+    return await fetchVideosByIds(raw, apiKey);
+  }
 
-    async function fetchVideosByIds(ids, apiKey) {
-        const videos = [];
-        for (let i = 0; i < ids.length; i += 50) {
-            const chunk = ids.slice(i, i + 50).join(",");
-            const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${chunk}&key=${apiKey}`;
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
-            const data = await res.json();
-            data.items?.forEach((v) => {
-                if (v.status?.privacyStatus !== "public") return;
-                videos.push({
-                    id: v.id,
-                    title: v.snippet.title,
-                    channel: v.snippet.channelTitle || "",
-                    thumb: v.snippet.thumbnails?.medium?.url || v.snippet.thumbnails?.default?.url || "",
-                });
-            });
+  async function resolveVideosForIframe(iframe, apiKey) {
+    const src = iframe.src || iframe.getAttribute("src") || "";
+    if (!src.includes("youtube.com/embed")) return [];
+
+    try {
+      const url = new URL(src, location.href);
+
+      // Cache key
+      const playlistParam = url.searchParams.get("playlist");
+      const listParam = url.searchParams.get("list");
+      const cacheKey = playlistParam ?? listParam;
+
+      if (cacheKey) {
+        const cached = Cache.get(cacheKey);
+        if (cached) {
+          // Logger.log(`[YTPlaylistWidget] Cache hit for "${cacheKey}"`);
+          return cached;
         }
-        return videos;
+      }
+
+      let videos = [];
+      if (playlistParam) {
+        const ids = playlistParam
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean);
+        if (ids.length) videos = await fetchVideosByIds(ids, apiKey);
+      } else if (listParam) {
+        videos = await fetchPlaylistVideos(listParam, apiKey);
+      }
+
+      if (cacheKey && videos.length > 0) {
+        Cache.set(cacheKey, videos);
+      }
+
+      return videos;
+    } catch (e) {
+      Logger.error("[YTPlaylistWidget] resolveVideosForIframe error:", e);
+      return [];
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Panel builder
+  // ---------------------------------------------------------------------------
+
+  function subscribeToPlayer(iframe) {
+    iframe.contentWindow?.postMessage(
+      JSON.stringify({ event: "listening" }),
+      "*"
+    );
+  }
+
+  function attachPanel(iframe, videos, themeVars) {
+    iframe.setAttribute("data-ytp-wrapped", "1");
+
+    const parent = iframe.parentNode;
+    const iframeStyle = window.getComputedStyle(iframe);
+    const isAbsolute = iframeStyle.position === "absolute";
+
+    // Wrapper
+    const wrapper = document.createElement("div");
+    wrapper.className = "ytp-ext-wrapper";
+    // Inject theme custom properties scoped to this wrapper
+    wrapper.setAttribute("style", themeVars);
+
+    if (isAbsolute) {
+      wrapper.style.cssText += `position:absolute;top:${iframeStyle.top};left:${iframeStyle.left};width:${iframeStyle.width};height:${iframeStyle.height};`;
+      iframe.style.position = "relative";
+      iframe.style.width = "100%";
+      iframe.style.height = "100%";
+    } else {
+      wrapper.style.cssText += `position:relative;display:inline-block;width:${iframeStyle.width};`;
     }
 
-    async function fetchPlaylistVideos(playlistId, apiKey) {
-        const raw = [];
-        let pageToken = "";
-        do {
-            const url =
-                `https://www.googleapis.com/youtube/v3/playlistItems?` +
-                `part=snippet&maxResults=50&playlistId=${playlistId}&pageToken=${pageToken}&key=${apiKey}`;
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
-            const data = await res.json();
-            data.items?.forEach((item) => {
-                const id = item.snippet.resourceId?.videoId;
-                if (id) raw.push(id);
-            });
-            pageToken = data.nextPageToken || "";
-        } while (pageToken);
+    // Placeholder keeps layout stable while we move the iframe into the wrapper
+    const placeholder = document.createElement("div");
+    placeholder.style.cssText = `width:${iframeStyle.width};height:${iframeStyle.height};background:#000;display:block;`;
+    parent.insertBefore(wrapper, iframe);
+    wrapper.appendChild(placeholder);
+    requestAnimationFrame(() => wrapper.replaceChild(iframe, placeholder));
 
-        return await fetchVideosByIds(raw, apiKey);
+    // postMessage API
+    const srcUrl = new URL(iframe.src);
+    const needsUpdate =
+      !srcUrl.searchParams.get("enablejsapi") ||
+      srcUrl.searchParams.get("origin") !== location.origin;
+    iframe.setAttribute("data-original-src", iframe.src);
+    if (needsUpdate) {
+      srcUrl.searchParams.set("enablejsapi", "1");
+      srcUrl.searchParams.set("origin", location.origin);
+      iframe.src = srcUrl.toString();
     }
 
-    async function resolveVideosForIframe(iframe, apiKey) {
-        const src = iframe.src || iframe.getAttribute("src") || "";
-        if (!src.includes("youtube.com/embed")) return [];
+    // Toggle button
+    const btn = document.createElement("button");
+    btn.className = "ytp-panel-toggle";
+    btn.setAttribute("aria-label", "Toggle playlist panel");
+    btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 5.5h18v2H3zm0 5.5h18v2H3zm0 5.5h18v2H3z" stroke="currentColor" stroke-width="0.8"/></svg>`;
+    wrapper.appendChild(btn);
 
-        try {
-            const url = new URL(src, location.href);
+    // Panel
+    const panel = document.createElement("div");
+    panel.className = "ytp-playlist-panel";
+    panel.style.width = iframeStyle.width;
 
-            // Cache key
-            const playlistParam = url.searchParams.get("playlist");
-            const listParam = url.searchParams.get("list");
-            const cacheKey = playlistParam ?? listParam;
-
-            if (cacheKey) {
-                const cached = Cache.get(cacheKey);
-                if (cached) {
-                    // Logger.log(`[YTPlaylistWidget] Cache hit for "${cacheKey}"`);
-                    return cached;
-                }
-            }
-
-            let videos = [];
-            if (playlistParam) {
-                const ids = playlistParam.split(",").map(id => id.trim()).filter(Boolean);
-                if (ids.length) videos = await fetchVideosByIds(ids, apiKey);
-            } else if (listParam) {
-                videos = await fetchPlaylistVideos(listParam, apiKey);
-            }
-
-            if (cacheKey && videos.length > 0) {
-                Cache.set(cacheKey, videos);
-            }
-
-            return videos;
-        } catch (e) {
-            Logger.error("[YTPlaylistWidget] resolveVideosForIframe error:", e);
-            return [];
-        }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Panel builder
-    // ---------------------------------------------------------------------------
-
-    function subscribeToPlayer(iframe) {
-        iframe.contentWindow?.postMessage(
-            JSON.stringify({ event: "listening" }),
-            "*"
-        );
-    }
-
-    function attachPanel(iframe, videos, themeVars) {
-        iframe.setAttribute("data-ytp-wrapped", "1");
-
-        const parent = iframe.parentNode;
-        const iframeStyle = window.getComputedStyle(iframe);
-        const isAbsolute = iframeStyle.position === "absolute";
-
-        // Wrapper
-        const wrapper = document.createElement("div");
-        wrapper.className = "ytp-ext-wrapper";
-        // Inject theme custom properties scoped to this wrapper
-        wrapper.setAttribute("style", themeVars);
-
-        if (isAbsolute) {
-            wrapper.style.cssText += `position:absolute;top:${iframeStyle.top};left:${iframeStyle.left};width:${iframeStyle.width};height:${iframeStyle.height};`;
-            iframe.style.position = "relative";
-            iframe.style.width = "100%";
-            iframe.style.height = "100%";
-        } else {
-            wrapper.style.cssText += `position:relative;display:inline-block;width:${iframeStyle.width};`;
-        }
-
-        // Placeholder keeps layout stable while we move the iframe into the wrapper
-        const placeholder = document.createElement("div");
-        placeholder.style.cssText = `width:${iframeStyle.width};height:${iframeStyle.height};background:#000;display:block;`;
-        parent.insertBefore(wrapper, iframe);
-        wrapper.appendChild(placeholder);
-        requestAnimationFrame(() => wrapper.replaceChild(iframe, placeholder));
-
-        // postMessage API
-        const srcUrl = new URL(iframe.src);
-        const needsUpdate = !srcUrl.searchParams.get("enablejsapi") || srcUrl.searchParams.get("origin") !== location.origin;
-        iframe.setAttribute("data-original-src", iframe.src);
-        if (needsUpdate) {
-            srcUrl.searchParams.set("enablejsapi", "1");
-            srcUrl.searchParams.set("origin", location.origin);
-            iframe.src = srcUrl.toString();
-        }
-
-        // Toggle button
-        const btn = document.createElement("button");
-        btn.className = "ytp-panel-toggle";
-        btn.setAttribute("aria-label", "Toggle playlist panel");
-        btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 5.5h18v2H3zm0 5.5h18v2H3zm0 5.5h18v2H3z" stroke="currentColor" stroke-width="0.8"/></svg>`;
-        wrapper.appendChild(btn);
-
-        // Panel
-        const panel = document.createElement("div");
-        panel.className = "ytp-playlist-panel";
-        panel.style.width = iframeStyle.width;
-
-        const header = document.createElement("div");
-        header.className = "ytp-panel-header";
-        header.innerHTML = `
+    const header = document.createElement("div");
+    header.className = "ytp-panel-header";
+    header.innerHTML = `
             <svg width="16" height="16" viewBox="0 0 24 24" fill="var(--ytp-accent)">
                 <path d="M21.543 6.498C22 8.28 22 12 22 12s0 3.72-.457 5.502c-.254.985-.997 1.76-1.938 2.022C17.896 20 12 20 12 20s-5.895 0-7.605-.476c-.940-.262-1.684-1.037-1.938-2.022C2 15.72 2 12 2 12s0-3.72.457-5.502c.254-.985.997-1.76 1.938-2.022C6.105 4 12 4 12 4s5.896 0 7.605.476c.941.262 1.684 1.037 1.938 2.022z"/>
                 <path d="M10 15l5.19-3L10 9v6z" fill="#fff"/>
             </svg>
-            Playlist <span class="ytp-count">${videos.length} video${videos.length !== 1 ? "s" : ""}</span>`;
-        panel.appendChild(header);
+            Playlist <span class="ytp-count">${videos.length} video${
+      videos.length !== 1 ? "s" : ""
+    }</span>`;
+    panel.appendChild(header);
 
-        const scroll = document.createElement("div");
-        scroll.className = "ytp-playlist-scroll";
-        panel.appendChild(scroll);
-        panel.setAttribute("style", themeVars + `width:${iframeStyle.width}`);
+    const scroll = document.createElement("div");
+    scroll.className = "ytp-playlist-scroll";
+    panel.appendChild(scroll);
+    panel.setAttribute("style", themeVars + `width:${iframeStyle.width}`);
 
-        parent.insertBefore(panel, wrapper.nextSibling);
+    parent.insertBefore(panel, wrapper.nextSibling);
 
-        // State
-        let currentIndex = 0;
-        let isPanelOpen = false;
+    // State
+    let currentIndex = 0;
+    let isPanelOpen = false;
 
-        // Item rendering
-        function renderItems() {
-            scroll.innerHTML = "";
-            videos.forEach((video, i) => {
-                const item = document.createElement("div");
-                item.className = "ytp-item" + (i === currentIndex ? " is-active" : "");
-                item.setAttribute("role", "button");
-                item.setAttribute("tabindex", "0");
-                item.setAttribute("aria-label", video.title);
-                item.innerHTML = `
+    // Item rendering
+    function renderItems() {
+      scroll.innerHTML = "";
+      videos.forEach((video, i) => {
+        const item = document.createElement("div");
+        item.className = "ytp-item" + (i === currentIndex ? " is-active" : "");
+        item.setAttribute("role", "button");
+        item.setAttribute("tabindex", "0");
+        item.setAttribute("aria-label", video.title);
+        item.innerHTML = `
                     <div class="ytp-thumb">
-                        <img src="${video.thumb}" alt="" loading="lazy" onerror="this.style.opacity=0">
+                        <img src="${
+                          video.thumb
+                        }" alt="" loading="lazy" onerror="this.style.opacity=0">
                         <div class="ytp-thumb-num">${i + 1}</div>
                     </div>
                     <div class="ytp-item-info">
@@ -461,138 +484,154 @@
                         </div>
                     </div>`;
 
-                const activate = () => {
-                    currentIndex = i;
-                    iframe.contentWindow?.postMessage(
-                        JSON.stringify({
-                            event: "command",
-                            func: "loadPlaylistById",
-                            args: [
-                                srcUrl.searchParams.get("list"),  // playlistId
-                                i,                                 // index dans la playlist
-                                0                                  // secondes de départ
-                            ]
-                        }),
-                        "*"
-                    );
-                    renderItems();
-                    scroll.querySelectorAll(".ytp-item")[i]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-                };
+        const activate = () => {
+          currentIndex = i;
+          // console.log("change playlist index", currentIndex, srcUrl);
+          iframe.contentWindow?.postMessage(
+            JSON.stringify({
+              event: "command",
+              func: "playVideoAt",
+              args: [i]
+            }),
+            "*"
+          );
+          renderItems();
+          scroll
+            .querySelectorAll(".ytp-item")
+            [i]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        };
 
-                item.addEventListener("click", activate);
-                item.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") activate(); });
-                scroll.appendChild(item);
+        item.addEventListener("click", activate);
+        item.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") activate();
+        });
+        scroll.appendChild(item);
+      });
+    }
+
+    btn.addEventListener("click", () => {
+      isPanelOpen = !isPanelOpen;
+      panel.classList.toggle("is-open", isPanelOpen);
+      btn.classList.toggle("is-active", isPanelOpen);
+      btn.setAttribute("aria-expanded", String(isPanelOpen));
+    });
+
+    window.addEventListener("message", (e) => {
+      if (!e.origin.includes("youtube.com")) return;
+      if (e.source !== iframe.contentWindow) return;
+      try {
+        const data = JSON.parse(e.data);
+        // Logger.log("data", data);
+        if (data.event === "infoDelivery" && data.info?.playerState === 1) {
+          const playlistIndex = data.info?.playlistIndex;
+          if (
+            typeof playlistIndex === "number" &&
+            playlistIndex >= 0 &&
+            currentIndex != playlistIndex
+          ) {
+            // Logger.log(`current index: ${currentIndex}, playlist index ${playlistIndex}`);
+            currentIndex = playlistIndex;
+            renderItems();
+            scroll.querySelectorAll(".ytp-item")[currentIndex]?.scrollIntoView({
+              block: "nearest",
+              behavior: "smooth"
             });
+          }
         }
+      } catch {}
+    });
 
-        btn.addEventListener("click", () => {
-            isPanelOpen = !isPanelOpen;
-            panel.classList.toggle("is-open", isPanelOpen);
-            btn.classList.toggle("is-active", isPanelOpen);
-            btn.setAttribute("aria-expanded", String(isPanelOpen));
-        });
+    iframe.addEventListener("load", () => {
+      // Logger.log("frame loaded");
+      subscribeToPlayer(iframe);
+    });
 
-        window.addEventListener("message", (e) => {
-            if (!e.origin.includes("youtube.com")) return;
-            if (e.source !== iframe.contentWindow) return;
-            try {
-                const data = JSON.parse(e.data);
-                // Logger.log("data", data);
-                if (data.event === "infoDelivery" && data.info?.playerState === 1) {
-                    const playlistIndex = data.info?.playlistIndex;
-                    if (typeof playlistIndex === "number" && playlistIndex >= 0 && currentIndex != playlistIndex) {
-                        // Logger.log(`current index: ${currentIndex}, playlist index ${playlistIndex}`);
-                        currentIndex = playlistIndex;
-                        renderItems();
-                        scroll.querySelectorAll(".ytp-item")[currentIndex]
-                            ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-                    }
-                }
-            } catch { }
-        });
+    renderItems();
+  }
 
-        iframe.addEventListener("load", () => {
-            // Logger.log("frame loaded");
-            subscribeToPlayer(iframe);
-        });
+  // ---------------------------------------------------------------------------
+  // Main class
+  // ---------------------------------------------------------------------------
 
-        renderItems();
+  class YTPlaylist {
+    constructor(options = {}) {
+      if (!options.apiKey) {
+        Logger.error("[YTPlaylistWidget] options.apiKey is required.");
+        return;
+      }
+      this._apiKey = options.apiKey;
+      this._scope = options.scope ?? null;
+      this._customCSS = options.css ?? null;
+      this._themeVars = buildThemeVars(options.theme ?? {});
+      this._onVideosFound = options.onVideosFound ?? null;
+      this._onError = options.onError ?? null;
+
+      // Unique style tag ID — allows multiple widget instances on the same page
+      this._styleId = `ytp-style-${Math.random().toString(36).slice(2, 9)}`;
+      this._initialized = false;
+
+      this._init();
     }
 
-    // ---------------------------------------------------------------------------
-    // Main class
-    // ---------------------------------------------------------------------------
+    async _init() {
+      if (this._initialized) return;
+      this._initialized = true;
 
-    class YTPlaylist {
-        constructor(options = {}) {
-            if (!options.apiKey) {
-                Logger.error("[YTPlaylistWidget] options.apiKey is required.");
-                return;
-            }
-            this._apiKey = options.apiKey;
-            this._scope = options.scope ?? null;
-            this._customCSS = options.css ?? null;
-            this._themeVars = buildThemeVars(options.theme ?? {});
-            this._onVideosFound = options.onVideosFound ?? null;
-            this._onError = options.onError ?? null;
+      const styleContent = this._customCSS ?? DEFAULT_CSS;
+      injectGlobalCSS(styleContent, this._styleId);
 
-            // Unique style tag ID — allows multiple widget instances on the same page
-            this._styleId = `ytp-style-${Math.random().toString(36).slice(2, 9)}`;
-            this._initialized = false;
-
-            this._init();
-        }
-
-        async _init() {
-            if (this._initialized) return;
-            this._initialized = true;
-
-            const styleContent = this._customCSS ?? DEFAULT_CSS;
-            injectGlobalCSS(styleContent, this._styleId);
-
-            if (document.readyState === "loading") {
-                document.addEventListener("DOMContentLoaded", () => this.scan());
-            } else {
-                await this.scan();
-            }
-        }
-
-        async scan() {
-            if (this._scanning) return;
-            this._scanning = true;
-
-            const root = this._resolveScope();
-            const frames = this._queryIframes(root);
-
-            for (const iframe of frames) {
-                try {
-                    const videos = await resolveVideosForIframe(iframe, this._apiKey);
-                    if (videos.length > 0) {
-                        this._onVideosFound?.({ videos, iframe, isFirstScan: this.isFirstScan });
-                        attachPanel(iframe, videos, this._themeVars);
-                    }
-                } catch (err) {
-                    Logger.error("[YTPlaylistWidget] scan error:", err);
-                    this._onError?.(err, iframe);
-                }
-            }
-
-            this.isFirstScan = false;
-            this._scanning = false;
-        }
-
-        _resolveScope() {
-            if (!this._scope) return document;
-            const el = document.querySelector(this._scope);
-            if (!el) Logger.warn(`[YTPlaylistWidget] scope "${this._scope}" not found, falling back to document.`);
-            return el ?? document;
-        }
-
-        /** Returns all YouTube embed iframes that haven't been processed yet. */
-        _queryIframes(root) {
-            return root.querySelectorAll('iframe[src*="youtube.com/embed"]:not([data-ytp-wrapped])');
-        }
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", () => this.scan());
+      } else {
+        await this.scan();
+      }
     }
 
-    return YTPlaylist;
+    async scan() {
+      if (this._scanning) return;
+      this._scanning = true;
+
+      const root = this._resolveScope();
+      const frames = this._queryIframes(root);
+
+      for (const iframe of frames) {
+        try {
+          const videos = await resolveVideosForIframe(iframe, this._apiKey);
+          if (videos.length > 0) {
+            this._onVideosFound?.({
+              videos,
+              iframe,
+              isFirstScan: this.isFirstScan
+            });
+            attachPanel(iframe, videos, this._themeVars);
+          }
+        } catch (err) {
+          Logger.error("[YTPlaylistWidget] scan error:", err);
+          this._onError?.(err, iframe);
+        }
+      }
+
+      this.isFirstScan = false;
+      this._scanning = false;
+    }
+
+    _resolveScope() {
+      if (!this._scope) return document;
+      const el = document.querySelector(this._scope);
+      if (!el)
+        Logger.warn(
+          `[YTPlaylistWidget] scope "${this._scope}" not found, falling back to document.`
+        );
+      return el ?? document;
+    }
+
+    /** Returns all YouTube embed iframes that haven't been processed yet. */
+    _queryIframes(root) {
+      return root.querySelectorAll(
+        'iframe[src*="youtube.com/embed"]:not([data-ytp-wrapped])'
+      );
+    }
+  }
+
+  return YTPlaylist;
 });

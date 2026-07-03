@@ -284,6 +284,7 @@
   // YouTube Data API helpers
   // ---------------------------------------------------------------------------
 
+  // function pour obtenir les infos des videos (par video ids)
   async function fetchVideosByIds(ids, apiKey) {
     const videos = [];
     for (let i = 0; i < ids.length; i += 50) {
@@ -294,7 +295,8 @@
         throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
       const data = await res.json();
       data.items?.forEach((v) => {
-        if (v.status?.privacyStatus !== "public") return;
+        // public | unlisted | private
+        if (v.status?.privacyStatus === "private") return;
         videos.push({
           id: v.id,
           title: v.snippet.title,
@@ -309,8 +311,9 @@
     return videos;
   }
 
-  async function fetchPlaylistVideos(playlistId, apiKey) {
-    const raw = [];
+  // function pour obtenir les video ids à partir d'un (play)list id
+  async function fetchPlaylistVideoIds(playlistId, apiKey) {
+    const ids = [];
     let pageToken = "";
     do {
       const url =
@@ -322,54 +325,70 @@
       const data = await res.json();
       data.items?.forEach((item) => {
         const id = item.snippet.resourceId?.videoId;
-        if (id) raw.push(id);
+        if (id) ids.push(id);
       });
       pageToken = data.nextPageToken || "";
     } while (pageToken);
 
-    return await fetchVideosByIds(raw, apiKey);
+    return ids;
+  }
+
+  // fallback
+  function fetchVideosByIdsNoKey(ids) {
+    return ids.map((id, i) => ({
+      id,
+      title: `Vidéo ${i + 1}`,
+      channel: "",
+      thumb: `https://img.youtube.com/vi/${id}/mqdefault.jpg`
+    }));
+  }
+
+  function getVideoIdsFromParam(playlistParam) {
+    return playlistParam
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
   }
 
   async function resolveVideosForIframe(iframe, apiKey) {
     const src = iframe.src || iframe.getAttribute("src") || "";
     if (!src.includes("youtube.com/embed")) return [];
 
+    const url = new URL(src, location.href);
+
+    // Cache key
+    // playlist => video ids séparés par virgules src="https://www.youtube.com/embed?playlist=at9-Gm1-MWQ,hyB__9470KU,Enevxnnn114,8gjDQdy7ysE,GgNTzHi4xtQ"
+    const playlistParam = url.searchParams.get("playlist");
+    // list =>  seulement playlist id   src="https://www.youtube.com/embed/videoseries?si=L-oUYx0Lbeagd0HT&amp;list=PLRVWztDBSD_Jh0PwXtJ0wBP0TLtHga1_Y"
+    const listParam = url.searchParams.get("list");
+    const cacheKey = playlistParam ?? listParam;
+
+    if (cacheKey) {
+      const cached = Cache.get(cacheKey);
+      if (cached) {
+        // Logger.log(`[YTPlaylistWidget] Cache hit for "${cacheKey}"`);
+        return cached;
+      }
+    }
+
+    let videos = [];
+    let ids = [];
     try {
-      const url = new URL(src, location.href);
-
-      // Cache key
-      const playlistParam = url.searchParams.get("playlist");
-      const listParam = url.searchParams.get("list");
-      const cacheKey = playlistParam ?? listParam;
-
-      if (cacheKey) {
-        const cached = Cache.get(cacheKey);
-        if (cached) {
-          // Logger.log(`[YTPlaylistWidget] Cache hit for "${cacheKey}"`);
-          return cached;
-        }
-      }
-
-      let videos = [];
+      // video ids
       if (playlistParam) {
-        const ids = playlistParam
-          .split(",")
-          .map((id) => id.trim())
-          .filter(Boolean);
-        if (ids.length) videos = await fetchVideosByIds(ids, apiKey);
+        ids = getVideoIdsFromParam(playlistParam);
       } else if (listParam) {
-        videos = await fetchPlaylistVideos(listParam, apiKey);
+        ids = await fetchPlaylistVideoIds(listParam, apiKey);
       }
-
+      // video infos
+      if (ids.length) videos = await fetchVideosByIds(ids, apiKey);
       if (cacheKey && videos.length > 0) {
         Cache.set(cacheKey, videos);
       }
-
-      return videos;
-    } catch (e) {
-      Logger.error("[YTPlaylistWidget] resolveVideosForIframe error:", e);
-      return [];
+    } catch (error) {
+      if (ids.length) videos = fetchVideosByIdsNoKey(ids);
     }
+    return videos;
   }
 
   // ---------------------------------------------------------------------------
@@ -632,6 +651,13 @@
       );
     }
   }
+
+  YTPlaylist.__internals = {
+    Cache,
+    getVideoIdsFromParam,
+    fetchVideosByIdsNoKey,
+    resolveVideosForIframe
+  };
 
   return YTPlaylist;
 });

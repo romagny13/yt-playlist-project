@@ -71,7 +71,7 @@
             <a href="https://www.youtube.com/watch?v=XQyMvwo0KRY&list=PLiItfFtbus3CGvXuGH7vC4W97It1lymu3" data-yt-link
                 data-yt-target="gp1">Playlist 2</a>
             <div id="gp1"></div>
-        </a>
+            </a>
         </div>
 
         <div id="scope2">
@@ -97,7 +97,25 @@
             <div class="video-container">
                 <iframe allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowfullscreen="" frameborder="0" height="315"
-                    src="https://www.youtube.com/embed?playlist=d83fjhyV8QY,J18oVYV-Ddc"
+                    src="https://www.youtube.com/embed?playlist=d83fjhyV8QY,J18oVYV-Ddc" title="YouTube video player"
+                    width="560">
+                </iframe>
+            </div>
+
+            <h2>Index</h2>
+            <div class="video-container">
+                <iframe allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowfullscreen="" frameborder="0" height="315"
+                    src="https://www.youtube.com/embed?playlist=at9-Gm1-MWQ,hyB__9470KU,Enevxnnn114,8gjDQdy7ysE,GgNTzHi4xtQ&index=2"
+                    title="YouTube video player" width="560">
+                </iframe>
+            </div>
+
+            <h2>Unlisted</h2>
+            <div class="video-container">
+                <iframe allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowfullscreen="" frameborder="0" height="315"
+                    src="https://www.youtube.com/embed?playlist=d83fjhyV8QY,J18oVYV-Ddc&index=2"
                     title="YouTube video player" width="560">
                 </iframe>
             </div>
@@ -140,7 +158,7 @@
             "scrollbar-thumb": "#c0c0c0"
         };
 
-        const apiKey = "AIzaSyDGgMOJkyudMYOyKRoTqbFVpcTLJKvOk4M" ; //"YOUR API KEY";
+        const apiKey = "AIzaSyDGgMOJkyudMYOyKRoTqbFVpcTLJKvOk4M"; //"YOUR API KEY";
 
         const w1 = new YTPlaylist({
             apiKey: apiKey,
@@ -150,6 +168,8 @@
                 console.log(videos);
             }
         });
+
+        console.log(w1.constructor.VERSION); // "1.0.0"
 
         const w2 = new YTPlaylist({
             apiKey: apiKey,

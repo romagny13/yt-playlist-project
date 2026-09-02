@@ -391,6 +391,22 @@
     return videos;
   }
 
+function getStartIndexFromIframe(iframe) {
+  try {
+    const src = iframe.src || iframe.getAttribute("src") || "";
+    const url = new URL(src, location.href);
+
+    const idx = parseInt(url.searchParams.get("index"), 10);
+
+    // URL : index=1 → JS : 0
+    // URL : index=2 → JS : 1
+    // URL : index=3 → JS : 2
+    return Number.isInteger(idx) && idx >= 1 ? idx - 1 : 0;
+  } catch {
+    return 0;
+  }
+}
+
   // ---------------------------------------------------------------------------
   // Panel builder
   // ---------------------------------------------------------------------------
@@ -462,9 +478,8 @@
                 <path d="M21.543 6.498C22 8.28 22 12 22 12s0 3.72-.457 5.502c-.254.985-.997 1.76-1.938 2.022C17.896 20 12 20 12 20s-5.895 0-7.605-.476c-.940-.262-1.684-1.037-1.938-2.022C2 15.72 2 12 2 12s0-3.72.457-5.502c.254-.985.997-1.76 1.938-2.022C6.105 4 12 4 12 4s5.896 0 7.605.476c.941.262 1.684 1.037 1.938 2.022z"/>
                 <path d="M10 15l5.19-3L10 9v6z" fill="#fff"/>
             </svg>
-            Playlist <span class="ytp-count">${videos.length} video${
-      videos.length !== 1 ? "s" : ""
-    }</span>`;
+            Playlist <span class="ytp-count">${videos.length} video${videos.length !== 1 ? "s" : ""
+      }</span>`;
     panel.appendChild(header);
 
     const scroll = document.createElement("div");
@@ -475,7 +490,9 @@
     parent.insertBefore(panel, wrapper.nextSibling);
 
     // State
-    let currentIndex = 0;
+    let currentIndex = getStartIndexFromIframe(iframe);
+    if (currentIndex >= videos.length) currentIndex = 0;
+
     let isPanelOpen = false;
 
     // Item rendering
@@ -489,9 +506,8 @@
         item.setAttribute("aria-label", video.title);
         item.innerHTML = `
                     <div class="ytp-thumb">
-                        <img src="${
-                          video.thumb
-                        }" alt="" loading="lazy" onerror="this.style.opacity=0">
+                        <img src="${video.thumb
+          }" alt="" loading="lazy" onerror="this.style.opacity=0">
                         <div class="ytp-thumb-num">${i + 1}</div>
                     </div>
                     <div class="ytp-item-info">
@@ -517,7 +533,7 @@
           renderItems();
           scroll
             .querySelectorAll(".ytp-item")
-            [i]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          [i]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
         };
 
         item.addEventListener("click", activate);
@@ -533,6 +549,13 @@
       panel.classList.toggle("is-open", isPanelOpen);
       btn.classList.toggle("is-active", isPanelOpen);
       btn.setAttribute("aria-expanded", String(isPanelOpen));
+
+      if (isPanelOpen) {
+        scroll.querySelectorAll(".ytp-item")[currentIndex]?.scrollIntoView({
+          block: "nearest",
+          behavior: "auto" // "auto" pour éviter une animation visible à l'ouverture
+        });
+      }
     });
 
     window.addEventListener("message", (e) => {
@@ -557,7 +580,7 @@
             });
           }
         }
-      } catch {}
+      } catch { }
     });
 
     iframe.addEventListener("load", () => {
@@ -573,6 +596,8 @@
   // ---------------------------------------------------------------------------
 
   class YTPlaylist {
+    static VERSION = "1.0.3";
+
     constructor(options = {}) {
       if (!options.apiKey) {
         Logger.error("[YTPlaylistWidget] options.apiKey is required.");

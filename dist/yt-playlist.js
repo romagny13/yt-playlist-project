@@ -919,7 +919,7 @@
   }
 
   class YTPlaylist {
-    static VERSION = "1.0.6";
+    static VERSION = "1.0.8";
 
     constructor(options = {}) {
       if (!options.apiKey) {

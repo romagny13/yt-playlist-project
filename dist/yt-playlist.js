@@ -1,18 +1,66 @@
-(function (root, factory) {
-  if (typeof define === "function" && define.amd) {
-    define([], factory);
-  } else if (typeof module === "object" && module.exports) {
-    module.exports = factory();
-  } else {
-    root.YTPlaylist = factory();
+(function (global, factory) {
+  typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
+  typeof define === 'function' && define.amd ? define(factory) :
+  (global = typeof globalThis !== 'undefined' ? globalThis : global || self, global.YTPlaylist = factory());
+})(this, (function () { 'use strict';
+
+  function isString(value) {
+    return typeof value === "string";
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+
+  // src/dom.js
+
+
+  /**
+   * Résout le scope DOM.
+   * - undefined / null → document
+   * - string → document.querySelector(selector)
+   * - HTMLElement / Element → retourne l’élément tel quel
+   */
+  function resolveScope(scope) {
+    if (scope == null) {
+      return document;
+    }
+
+    if (isString(scope)) {
+      const element = document.querySelector(scope);
+      if (!element) {
+        throw new Error(
+          `[YTPlaylist] Element not found for selector: "${scope}"`
+        );
+      }
+      return element;
+    }
+
+    // On considère que c’est déjà un élément DOM
+    return scope;
+  }
+
+  /**
+   * Récupère toutes les iframes YouTube dans un scope donné.
+   * @param {ParentNode} root - Element ou Document
+   * @returns {HTMLIFrameElement[]}
+   */
+  function queryYouTubeIframes(root = document) {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return [];
+    }
+
+    // Plus robuste : youtube.com + youtube-nocookie.com + différents formats d'embed
+    const selector =
+      'iframe[src*="youtube.com/embed"], iframe[src*="youtube-nocookie.com/embed"]';
+
+    // On convertit en vrai Array (plus pratique)
+    return Array.from(root.querySelectorAll(selector));
+  }
+
   class Logger {
     static _enabled = true;
 
     static enable() {
       Logger._enabled = true;
     }
+
     static disable() {
       Logger._enabled = false;
     }
@@ -20,49 +68,270 @@
     static log(msg) {
       if (Logger._enabled) console.log(msg);
     }
+
     static warn(msg) {
       if (Logger._enabled) console.warn(msg);
     }
+
     static error(msg, err) {
       if (Logger._enabled) console.error(msg, err);
     }
   }
 
-  const Cache = {
-    TTL: 24 * 60 * 60 * 1000, // 24h ms
-    PREFIX: "ytp_",
+  // cache.js
 
-    _key(id) {
-      return `${this.PREFIX}${id}`;
-    },
+  const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
-    get(id) {
-      try {
-        const raw = localStorage.getItem(this._key(id));
-        if (!raw) return null;
-        const { data, expiresAt } = JSON.parse(raw);
-        if (Date.now() > expiresAt) {
-          localStorage.removeItem(this._key(id));
+  /**
+   * Crée un cache clé/valeur avec expiration, basé sur un storage type
+   * localStorage (get/set/removeItem). Une entrée expirée est supprimée
+   * automatiquement au prochain get().
+   */
+  function createCache({
+    prefix,
+    ttlMs = DEFAULT_TTL_MS,
+    storage = localStorage
+  } = {}) {
+    if (!prefix) throw new Error("createCache: 'prefix' est requis");
+
+    const buildKey = (key) => `${prefix}${key}`;
+
+    return {
+      get(key) {
+        if (!key) return null;
+        try {
+          const raw = storage.getItem(buildKey(key));
+          if (!raw) return null;
+
+          const { data, expiresAt } = JSON.parse(raw);
+          if (Date.now() > expiresAt) {
+            storage.removeItem(buildKey(key));
+            return null;
+          }
+          return data;
+        } catch {
           return null;
         }
-        return data;
-      } catch {
-        return null;
-      }
-    },
+      },
 
-    set(id, data) {
-      try {
-        localStorage.setItem(
-          this._key(id),
-          JSON.stringify({ data, expiresAt: Date.now() + this.TTL })
-        );
-      } catch (e) {
-        // Quota
-        Logger.warn("[YTPlaylistWidget] Cache write failed:", e.message);
+      set(key, data) {
+        if (!key || data == null) return;
+        try {
+          storage.setItem(
+            buildKey(key),
+            JSON.stringify({ data, expiresAt: Date.now() + ttlMs })
+          );
+        } catch (error) {
+          Logger.warn(`[Cache] Échec d'écriture pour "${key}":`, error.message);
+        }
+      },
+
+      remove(key) {
+        if (!key) return;
+        storage.removeItem(buildKey(key));
+      }
+    };
+  }
+
+  // youtube.js
+
+
+  const videoCache = createCache({ prefix: "ytp_" });
+
+  const YOUTUBE_EMBED_PATH = "youtube.com/embed";
+
+  /**
+   * Playlist partagée depuis la page détails de la playlist sur youtube.com.
+   * https://www.youtube.com/embed/videoseries?si={SHARE_ID}&list={PLAYLIST_ID}
+   */
+  function isSharedPlaylistEmbedUrl(src) {
+    return isString(getEmbedSearchParam(src, "list"));
+  }
+
+  /**
+   * Liste de video ids.
+   * https://www.youtube.com/embed?playlist={video_ID1},{video_ID2},...
+   */
+  function isVideoIdListEmbedUrl(src) {
+    return isString(getEmbedSearchParam(src, "playlist"));
+  }
+
+  function getVideoIdsFromEmbedUrl(src) {
+    const playlistParam = getEmbedSearchParam(src, "playlist");
+    if (!isString(playlistParam)) return [];
+
+    return playlistParam
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+  }
+
+  /**
+   * Extrait un paramètre de recherche d'une URL d'embed YouTube.
+   * Retourne null si ce n'est pas un embed YouTube ou si l'URL est invalide.
+   */
+  function getEmbedSearchParam(src, paramName) {
+    if (!isString(src) || !src.includes(YOUTUBE_EMBED_PATH)) return null;
+
+    try {
+      const url = new URL(src, location.href);
+      return url.searchParams.get(paramName);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Détermine l'index de départ
+   */
+  function getStartIndexFromIframe(src) {
+    const param = getEmbedSearchParam(src, "index");
+    if (param) {
+      const index = parseInt(param, 10);
+      return index;
+    }
+    return 0;
+  }
+
+  // *****************  YOUTUBE DATA API  **************************
+
+  const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
+  const MAX_IDS_PER_REQUEST = 50;
+
+  /** Récupère les video ids à partir d'un playlist id avec YouTube Data Api */
+  async function fetchVideoIdsFromPlaylist(playlistId, apiKey) {
+    const videoIds = [];
+    let pageToken = "";
+
+    do {
+      const params = new URLSearchParams({
+        part: "contentDetails",
+        maxResults: "50",
+        playlistId,
+        key: apiKey
+      });
+      if (pageToken) params.set("pageToken", pageToken);
+
+      const res = await fetch(`${YOUTUBE_API_BASE}/playlistItems?${params}`);
+      if (!res.ok) {
+        throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      for (const item of data.items ?? []) {
+        const videoId = item.contentDetails?.videoId;
+        if (videoId) videoIds.push(videoId);
+      }
+
+      pageToken = data.nextPageToken ?? "";
+    } while (pageToken);
+
+    return videoIds;
+  }
+
+  async function fetchVideosByIds(videoIds, apiKey) {
+    const videos = [];
+
+    for (const chunk of chunkArray(videoIds, MAX_IDS_PER_REQUEST)) {
+      const params = new URLSearchParams({
+        part: "snippet,status",
+        id: chunk.join(","),
+        key: apiKey
+      });
+
+      const res = await fetch(`${YOUTUBE_API_BASE}/videos?${params}`);
+      if (!res.ok) {
+        throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      for (const video of data.items ?? []) {
+        // On exclut les vidéos privées (public / unlisted sont conservées)
+        if (video.status?.privacyStatus === "private") continue;
+
+        videos.push({
+          id: video.id,
+          title: video.snippet.title,
+          channelTitle: video.snippet.channelTitle || "",
+          thumbnailUrl:
+            video.snippet.thumbnails?.medium?.url ||
+            video.snippet.thumbnails?.default?.url ||
+            ""
+        });
       }
     }
-  };
+
+    return videos;
+  }
+
+  function chunkArray(arr, size) {
+    const chunks = [];
+    for (let i = 0; i < arr.length; i += size) {
+      chunks.push(arr.slice(i, i + size));
+    }
+    return chunks;
+  }
+
+  /**
+   * Construit des infos vidéo minimales sans appel à l'API, à utiliser en
+   * fallback si fetchVideosByIds échoue. Le thumbnail utilise l'endpoint
+   * public img.youtube.com (pas besoin de clé API).
+   */
+  function buildFallbackVideos(videoIds) {
+    return videoIds.map((videoId, index) => ({
+      id: videoId,
+      title: `Vidéo ${index + 1}`,
+      channelTitle: "",
+      thumbnailUrl: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`
+    }));
+  }
+
+  /**
+   * Résout la source d'une URL embed YouTube : où récupérer les video ids
+   * et quelle clé utiliser pour le cache. Retourne null si src ne correspond
+   * à aucun format embed connu.
+   */
+  function resolveEmbedSource(src) {
+    if (isSharedPlaylistEmbedUrl(src)) {
+      const playlistId = getEmbedSearchParam(src, "list");
+      return {
+        cacheKey: playlistId,
+        getVideoIds: (apiKey) => fetchVideoIdsFromPlaylist(playlistId, apiKey)
+      };
+    }
+
+    if (isVideoIdListEmbedUrl(src)) {
+      const videoIds = getVideoIdsFromEmbedUrl(src);
+      return {
+        cacheKey: getEmbedSearchParam(src, "playlist"),
+        getVideoIds: () => videoIds
+      };
+    }
+
+    return null;
+  }
+
+  async function getVideosFromEmbedSrc(src, apiKey) {
+    const source = resolveEmbedSource(src);
+    if (!source) return [];
+
+    const cached = videoCache.get(source.cacheKey);
+    if (cached) return cached;
+
+    let videoIds = [];
+    try {
+      videoIds = await source.getVideoIds(apiKey);
+      const videos = await fetchVideosByIds(videoIds, apiKey);
+      if (videos.length > 0) videoCache.set(source.cacheKey, videos);
+      return videos;
+    } catch (error) {
+      Logger.warn(
+        `[YTPlaylist] Fail to fetch "${source.cacheKey}":`,
+        error.message
+      );
+      return videoIds.length > 0 ? buildFallbackVideos(videoIds) : [];
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Default theme
@@ -281,161 +550,21 @@
   }
 
   // ---------------------------------------------------------------------------
-  // YouTube Data API helpers
+  // Player Messaging
   // ---------------------------------------------------------------------------
 
-  // function pour obtenir les infos des videos (par video ids)
-  async function fetchVideosByIds(ids, apiKey) {
-    const videos = [];
-    for (let i = 0; i < ids.length; i += 50) {
-      const chunk = ids.slice(i, i + 50).join(",");
-      const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${chunk}&key=${apiKey}`;
-      const res = await fetch(url);
-      if (!res.ok)
-        throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
-      const data = await res.json();
-      data.items?.forEach((v) => {
-        // public | unlisted | private
-        if (v.status?.privacyStatus === "private") return;
-        videos.push({
-          id: v.id,
-          title: v.snippet.title,
-          channel: v.snippet.channelTitle || "",
-          thumb:
-            v.snippet.thumbnails?.medium?.url ||
-            v.snippet.thumbnails?.default?.url ||
-            ""
-        });
-      });
-    }
-    return videos;
-  }
-
-  // function pour obtenir les video ids à partir d'un (play)list id
-  async function fetchPlaylistVideoIds(playlistId, apiKey) {
-    const ids = [];
-    let pageToken = "";
-    do {
-      const url =
-        `https://www.googleapis.com/youtube/v3/playlistItems?` +
-        `part=snippet&maxResults=50&playlistId=${playlistId}&pageToken=${pageToken}&key=${apiKey}`;
-      const res = await fetch(url);
-      if (!res.ok)
-        throw new Error(`YouTube API ${res.status}: ${res.statusText}`);
-      const data = await res.json();
-      data.items?.forEach((item) => {
-        const id = item.snippet.resourceId?.videoId;
-        if (id) ids.push(id);
-      });
-      pageToken = data.nextPageToken || "";
-    } while (pageToken);
-
-    return ids;
-  }
-
-  // fallback
-  function fetchVideosByIdsNoKey(ids) {
-    return ids.map((id, i) => ({
-      id,
-      title: `Vidéo ${i + 1}`,
-      channel: "",
-      thumb: `https://img.youtube.com/vi/${id}/mqdefault.jpg`
-    }));
-  }
-
-  function getVideoIdsFromParam(playlistParam) {
-    return playlistParam
-      .split(",")
-      .map((id) => id.trim())
-      .filter(Boolean);
-  }
-
-  async function resolveVideosForIframe(iframe, apiKey) {
-    const src = iframe.src || iframe.getAttribute("src") || "";
-    if (!src.includes("youtube.com/embed")) return [];
-
-    const url = new URL(src, location.href);
-
-    // Cache key
-    // playlist => video ids séparés par virgules src="https://www.youtube.com/embed?playlist=at9-Gm1-MWQ,hyB__9470KU,Enevxnnn114,8gjDQdy7ysE,GgNTzHi4xtQ"
-    const playlistParam = url.searchParams.get("playlist");
-    // list =>  seulement playlist id   src="https://www.youtube.com/embed/videoseries?si=L-oUYx0Lbeagd0HT&amp;list=PLRVWztDBSD_Jh0PwXtJ0wBP0TLtHga1_Y"
-    const listParam = url.searchParams.get("list");
-    const cacheKey = playlistParam ?? listParam;
-
-    if (cacheKey) {
-      const cached = Cache.get(cacheKey);
-      if (cached) {
-        // Logger.log(`[YTPlaylistWidget] Cache hit for "${cacheKey}"`);
-        return cached;
-      }
-    }
-
-    let videos = [];
-    let ids = [];
-    try {
-      // video ids
-      if (playlistParam) {
-        ids = getVideoIdsFromParam(playlistParam);
-      } else if (listParam) {
-        ids = await fetchPlaylistVideoIds(listParam, apiKey);
-      }
-      // video infos
-      if (ids.length) videos = await fetchVideosByIds(ids, apiKey);
-      if (cacheKey && videos.length > 0) {
-        Cache.set(cacheKey, videos);
-      }
-    } catch (error) {
-      if (ids.length) videos = fetchVideosByIdsNoKey(ids);
-    }
-    return videos;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Start index resolution (pure, testable)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Extrait la valeur brute du paramètre "index" depuis une URL d'iframe (string ou URL).
-   * Retourne null si absent ou invalide.
-   */
-  function parseIndexParam(src) {
-    try {
-      const url = src instanceof URL ? src : new URL(src, location.href);
-      const raw = url.searchParams.get("index");
-      const idx = parseInt(raw, 10);
-      // URL YouTube : index 1-based. On ne valide que le format ici.
-      return Number.isInteger(idx) && idx >= 1 ? idx : null;
-    } catch {
-      return null;
+  function ensureIframeHasJsApiEnabled(iframe) {
+    const srcUrl = new URL(iframe.src);
+    const needsUpdate =
+      !srcUrl.searchParams.get("enablejsapi") ||
+      srcUrl.searchParams.get("origin") !== location.origin;
+    iframe.setAttribute("data-original-src", iframe.src);
+    if (needsUpdate) {
+      srcUrl.searchParams.set("enablejsapi", "1");
+      srcUrl.searchParams.set("origin", location.origin);
+      iframe.src = srcUrl.toString();
     }
   }
-
-  /** Convertit un index 1-based (URL YouTube) en index 0-based (tableau JS). */
-  function toZeroBasedIndex(oneBasedIndex) {
-    return oneBasedIndex - 1;
-  }
-
-  /** Borne un index dans [0, length-1] ; retourne 0 si hors bornes ou liste vide. */
-  function clampIndex(index, length) {
-    if (!Number.isInteger(index) || index < 0 || index >= length) return 0;
-    return index;
-  }
-
-  /**
-   * Détermine l'index de départ (0-based) à afficher/forcer pour une iframe donnée,
-   * borné à la taille de la liste de vidéos.
-   */
-  function getStartIndexFromIframe(iframe, videosLength) {
-    const src = iframe.src || iframe.getAttribute("src") || "";
-    const oneBasedIndex = parseIndexParam(src);
-    if (oneBasedIndex === null) return 0;
-    return clampIndex(toZeroBasedIndex(oneBasedIndex), videosLength);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Player messaging helpers (pure-ish, testable — dépendance iframe injectée)
-  // ---------------------------------------------------------------------------
 
   function subscribeToPlayer(iframe) {
     iframe.contentWindow?.postMessage(
@@ -451,260 +580,350 @@
     );
   }
 
-  /** Valide qu'un message postMessage vient bien du player YouTube attendu. */
-  function isMessageFromPlayer(e, iframe) {
-    return Boolean(
-      e &&
-        iframe &&
-        typeof e.origin === "string" &&
-        e.origin.includes("youtube.com") &&
-        e.source === iframe.contentWindow
-    );
+  function normalizeStartIndex(startIndex) {
+    return startIndex > 0 ? startIndex - 1 : 0;
   }
 
-  /** Parse le payload JSON d'un event postMessage YouTube. Retourne null si invalide. */
-  function parsePlayerMessageData(e) {
-    try {
-      return JSON.parse(e.data);
-    } catch {
-      return null;
+  class FrameWithPlaylist {
+    constructor(iframe, videos, startIndex, themeVars) {
+      this.iframe = iframe;
+      this.videos = videos;
+      this.startIndex = startIndex;
+      this.currentIndex = startIndex;
+      this.themeVars = themeVars;
+
+      this.isPanelOpen = false;
+      this.initialSyncDone = false;
+
+      this.parent = iframe.parentNode;
+      this.iframeStyle = window.getComputedStyle(iframe);
+      this.isAbsolute = this.iframeStyle.position === "absolute";
+
+      this.wrapper = null;
+      this.toggleButton = null;
+      this.panel = null;
+      this.scroll = null;
+
+      this._onMessage = this._onMessage.bind(this);
+      this._onIframeLoad = this._onIframeLoad.bind(this);
+
+      this._create();
     }
-  }
 
-  /** Combine validation + parsing pour un event postMessage donné. */
-  function readPlayerMessage(e, iframe) {
-    if (!isMessageFromPlayer(e, iframe)) return null;
-    return parsePlayerMessageData(e);
-  }
+    // -------------------------------------------------------------------------
+    // Initialization
+    // -------------------------------------------------------------------------
 
-  /** Extrait un playlistIndex valide (>= 0) d'un message "infoDelivery", sinon null. */
-  function extractPlaylistIndex(data) {
-    if (!data || data.event !== "infoDelivery") return null;
-    const idx = data.info?.playlistIndex;
-    return typeof idx === "number" && idx >= 0 ? idx : null;
-  }
+    _create() {
+      this._createWrapper();
+      this._createToggleButton();
+      this._createPanel();
+      this._bindEvents();
 
-  // ---------------------------------------------------------------------------
-  // Panel builder
-  // ---------------------------------------------------------------------------
+      this.renderItems();
+    }
 
-  function createPlaylistIndexState(iframe, videos) {
-    let currentIndex = getStartIndexFromIframe(iframe, videos.length);
-    // true dès que le player a été forcé (ou n'avait pas besoin de l'être)
-    let hasSyncedStartIndex = currentIndex === 0;
+    _createWrapper() {
+      this.iframe.setAttribute("data-ytp-wrapped", "1");
 
-    return {
-      get: () => currentIndex,
-      set: (value) => {
-        currentIndex = value;
-      },
-      hasSyncedStart: () => hasSyncedStartIndex,
-      markStartSynced: () => {
-        hasSyncedStartIndex = true;
+      this.wrapper = document.createElement("div");
+      this.wrapper.className = "ytp-ext-wrapper";
+
+      this.wrapper.setAttribute("style", this.themeVars);
+
+      if (this.isAbsolute) {
+        this.wrapper.style.cssText +=
+          `position:absolute;` +
+          `top:${this.iframeStyle.top};` +
+          `left:${this.iframeStyle.left};` +
+          `width:${this.iframeStyle.width};` +
+          `height:${this.iframeStyle.height};`;
+
+        this.iframe.style.position = "relative";
+        this.iframe.style.width = "100%";
+        this.iframe.style.height = "100%";
+      } else {
+        this.wrapper.style.cssText +=
+          `position:relative;` +
+          `display:inline-block;` +
+          `width:${this.iframeStyle.width};`;
       }
-    };
-  }
 
-  function buildPanelHeaderHTML(videoCount) {
-    const label = `${videoCount} video${videoCount !== 1 ? "s" : ""}`;
-    return `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="var(--ytp-accent)">
-                <path d="M21.543 6.498C22 8.28 22 12 22 12s0 3.72-.457 5.502c-.254.985-.997 1.76-1.938 2.022C17.896 20 12 20 12 20s-5.895 0-7.605-.476c-.940-.262-1.684-1.037-1.938-2.022C2 15.72 2 12 2 12s0-3.72.457-5.502c.254-.985.997-1.76 1.938-2.022C6.105 4 12 4 12 4s5.896 0 7.605.476c.941.262 1.684 1.037 1.938 2.022z"/>
-                <path d="M10 15l5.19-3L10 9v6z" fill="#fff"/>
-            </svg>
-            Playlist <span class="ytp-count">${label}</span>`;
-  }
+      const placeholder = document.createElement("div");
 
-  function buildPlaylistItemHTML(video, position) {
-    return `
-                    <div class="ytp-thumb">
-                        <img src="${video.thumb}" alt="" loading="lazy" onerror="this.style.opacity=0">
-                        <div class="ytp-thumb-num">${position}</div>
-                    </div>
-                    <div class="ytp-item-info">
-                        <div class="ytp-item-title">${video.title}</div>
-                        <div class="ytp-item-ch">${video.channel || ""}</div>
-                        <div class="ytp-playing">
-                            <div class="ytp-bars"><span></span><span></span><span></span></div>
-                            Now playing
-                        </div>
-                    </div>`;
-  }
+      placeholder.style.cssText =
+        `width:${this.iframeStyle.width};` +
+        `height:${this.iframeStyle.height};` +
+        `background:#000;` +
+        `display:block;`;
 
-  function ensureIframeHasJsApiEnabled(iframe) {
-    const srcUrl = new URL(iframe.src);
-    const needsUpdate =
-      !srcUrl.searchParams.get("enablejsapi") ||
-      srcUrl.searchParams.get("origin") !== location.origin;
-    iframe.setAttribute("data-original-src", iframe.src);
-    if (needsUpdate) {
-      srcUrl.searchParams.set("enablejsapi", "1");
-      srcUrl.searchParams.set("origin", location.origin);
-      iframe.src = srcUrl.toString();
-    }
-  }
+      this.parent.insertBefore(this.wrapper, this.iframe);
+      this.wrapper.appendChild(placeholder);
 
-  function createIframeWrapper(iframe) {
-    const parent = iframe.parentNode;
-    const iframeStyle = window.getComputedStyle(iframe);
-    const isAbsolute = iframeStyle.position === "absolute";
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "ytp-ext-wrapper";
-
-    if (isAbsolute) {
-      wrapper.style.cssText = `position:absolute;top:${iframeStyle.top};left:${iframeStyle.left};width:${iframeStyle.width};height:${iframeStyle.height};`;
-      iframe.style.position = "relative";
-      iframe.style.width = "100%";
-      iframe.style.height = "100%";
-    } else {
-      wrapper.style.cssText = `position:relative;display:inline-block;width:${iframeStyle.width};`;
-    }
-
-    const placeholder = document.createElement("div");
-    placeholder.style.cssText = `width:${iframeStyle.width};height:${iframeStyle.height};background:#000;display:block;`;
-    parent.insertBefore(wrapper, iframe);
-    wrapper.appendChild(placeholder);
-    requestAnimationFrame(() => wrapper.replaceChild(iframe, placeholder));
-
-    return { wrapper, iframeStyle, parent };
-  }
-
-  function createToggleButton() {
-    const btn = document.createElement("button");
-    btn.className = "ytp-panel-toggle";
-    btn.setAttribute("aria-label", "Toggle playlist panel");
-    btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 5.5h18v2H3zm0 5.5h18v2H3zm0 5.5h18v2H3z" stroke="currentColor" stroke-width="0.8"/></svg>`;
-    return btn;
-  }
-
-  function createPlaylistPanel(videos, themeVars, widthCss) {
-    const panel = document.createElement("div");
-    panel.className = "ytp-playlist-panel";
-
-    const header = document.createElement("div");
-    header.className = "ytp-panel-header";
-    header.innerHTML = buildPanelHeaderHTML(videos.length);
-    panel.appendChild(header);
-
-    const scroll = document.createElement("div");
-    scroll.className = "ytp-playlist-scroll";
-    panel.appendChild(scroll);
-
-    panel.setAttribute("style", `${themeVars} width:${widthCss}`);
-
-    return { panel, scroll };
-  }
-
-  function attachPanel(iframe, videos, themeVars) {
-    iframe.setAttribute("data-ytp-wrapped", "1");
-
-    const { wrapper, iframeStyle, parent } = createIframeWrapper(iframe);
-    wrapper.setAttribute("style", wrapper.getAttribute("style") + themeVars);
-
-    ensureIframeHasJsApiEnabled(iframe);
-
-    const btn = createToggleButton();
-    wrapper.appendChild(btn);
-
-    const { panel, scroll } = createPlaylistPanel(
-      videos,
-      themeVars,
-      iframeStyle.width
-    );
-    parent.insertBefore(panel, wrapper.nextSibling);
-
-    const indexState = createPlaylistIndexState(iframe, videos);
-    let isPanelOpen = false;
-
-    function scrollToActiveItem(behavior = "smooth") {
-      scroll
-        .querySelectorAll(".ytp-item")
-        [indexState.get()]?.scrollIntoView({ block: "nearest", behavior });
-    }
-
-    function renderItems() {
-      scroll.innerHTML = "";
-      videos.forEach((video, i) => {
-        const item = document.createElement("div");
-        item.className =
-          "ytp-item" + (i === indexState.get() ? " is-active" : "");
-        item.setAttribute("role", "button");
-        item.setAttribute("tabindex", "0");
-        item.setAttribute("aria-label", video.title);
-        item.innerHTML = buildPlaylistItemHTML(video, i + 1);
-
-        const activate = () => {
-          indexState.markStartSynced();
-          sendPlayVideoAt(iframe, i);
-          setActiveIndex(i);
-        };
-
-        item.addEventListener("click", activate);
-        item.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" || e.key === " ") activate();
-        });
-        scroll.appendChild(item);
+      requestAnimationFrame(() => {
+        this.wrapper.replaceChild(this.iframe, placeholder);
       });
     }
 
-    function setActiveIndex(newIndex) {
-      if (newIndex === indexState.get()) return;
-      indexState.set(newIndex);
-      renderItems();
-      scrollToActiveItem();
+    _createToggleButton() {
+      this.toggleButton = document.createElement("button");
+
+      this.toggleButton.className = "ytp-panel-toggle";
+      this.toggleButton.setAttribute("aria-label", "Toggle playlist panel");
+
+      this.toggleButton.innerHTML = `
+      <svg
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          d="M3 5.5h18v2H3zm0 5.5h18v2H3zm0 5.5h18v2H3z"
+          stroke="currentColor"
+          stroke-width="0.8"
+        />
+      </svg>
+    `;
+
+      this.wrapper.appendChild(this.toggleButton);
     }
 
-    /**
-     * Réagit à un playlistIndex rapporté par le player.
-     * Au tout premier rapport, si l'index réel du player diverge de l'index de
-     * départ demandé (via l'URL), on force activement playVideoAt plutôt que
-     * de se contenter d'attendre : YouTube n'honore pas toujours "index=" seul
-     * (ex: playlist=id1,id2,... sans list=, ou léger délai côté player).
-     */
-    function handlePlaylistIndexReported(playlistIndex) {
-      if (!indexState.hasSyncedStart()) {
-        indexState.markStartSynced();
-        if (playlistIndex !== indexState.get()) {
-          sendPlayVideoAt(iframe, indexState.get());
-          return; // on attend le prochain rapport pour confirmer le saut
+    _createPanel() {
+      this.panel = document.createElement("div");
+      this.panel.className = "ytp-playlist-panel";
+
+      this.panel.style.width = this.iframeStyle.width;
+
+      const header = document.createElement("div");
+      header.className = "ytp-panel-header";
+
+      header.innerHTML = `
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="var(--ytp-accent)"
+      >
+        <path
+          d="M21.543 6.498C22 8.28 22 12 22 12s0 3.72-.457 5.502
+             c-.254.985-.997 1.76-1.938 2.022C17.896 20 12 20 12 20
+             s-5.895 0-7.605-.476c-.940-.262-1.684-1.037-1.938-2.022
+             C2 15.72 2 12 2 12s0-3.72.457-5.502
+             c.254-.985.997-1.76 1.938-2.022C6.105 4 12 4 12 4
+             s5.896 0 7.605.476c.941.262 1.684 1.037 1.938 2.022z"
+        />
+        <path
+          d="M10 15l5.19-3L10 9v6z"
+          fill="#fff"
+        />
+      </svg>
+
+      Playlist
+
+      <span class="ytp-count">
+        ${this.videos.length}
+        video${this.videos.length !== 1 ? "s" : ""}
+      </span>
+    `;
+
+      this.panel.appendChild(header);
+
+      this.scroll = document.createElement("div");
+      this.scroll.className = "ytp-playlist-scroll";
+
+      this.panel.appendChild(this.scroll);
+
+      this.panel.setAttribute(
+        "style",
+        `${this.themeVars}width:${this.iframeStyle.width}`
+      );
+
+      this.parent.insertBefore(this.panel, this.wrapper.nextSibling);
+    }
+
+    // -------------------------------------------------------------------------
+    // Events
+    // -------------------------------------------------------------------------
+
+    _bindEvents() {
+      this.toggleButton.addEventListener("click", () => this.togglePanel());
+
+      window.addEventListener("message", this._onMessage);
+
+      this.iframe.addEventListener("load", this._onIframeLoad);
+    }
+
+    _onIframeLoad() {
+      subscribeToPlayer(this.iframe);
+    }
+
+    _onMessage(e) {
+      if (!e.origin.includes("youtube.com")) return;
+      if (e.source !== this.iframe.contentWindow) return;
+
+      try {
+        const data = JSON.parse(e.data);
+
+        if (data.event === "infoDelivery" && data.info?.playerState === 1) {
+          this._handlePlaying(data.info);
+        }
+      } catch {}
+    }
+
+    _handlePlaying(info) {
+      const playlistIndex = info?.playlistIndex;
+
+      // Premier lancement uniquement.
+      //
+      // YouTube peut avoir démarré sur la première vidéo alors que
+      // currentIndex correspond à la vidéo indiquée par l'URL.
+      if (!this.initialSyncDone) {
+        this.initialSyncDone = true;
+
+        if (playlistIndex !== this.currentIndex) {
+          this.playVideoAt(this.currentIndex);
+          return;
         }
       }
-      setActiveIndex(playlistIndex);
+
+      // Synchronisation de l'élément sélectionné avec le player YouTube.
+      if (playlistIndex !== this.currentIndex) {
+        this.currentIndex = playlistIndex;
+        this.renderItems();
+      }
     }
 
-    function handlePlayerMessage(e) {
-      const data = readPlayerMessage(e, iframe);
-      const playlistIndex = extractPlaylistIndex(data);
-      if (playlistIndex === null) return;
-      handlePlaylistIndexReported(playlistIndex);
+    // -------------------------------------------------------------------------
+    // Panel
+    // -------------------------------------------------------------------------
+
+    togglePanel() {
+      this.isPanelOpen = !this.isPanelOpen;
+
+      this.panel.classList.toggle("is-open", this.isPanelOpen);
+
+      this.toggleButton.classList.toggle("is-active", this.isPanelOpen);
+
+      this.toggleButton.setAttribute("aria-expanded", String(this.isPanelOpen));
     }
 
-    function handleToggleClick() {
-      isPanelOpen = !isPanelOpen;
-      panel.classList.toggle("is-open", isPanelOpen);
-      btn.classList.toggle("is-active", isPanelOpen);
-      btn.setAttribute("aria-expanded", String(isPanelOpen));
-      if (isPanelOpen) scrollToActiveItem("auto");
+    // -------------------------------------------------------------------------
+    // Playlist
+    // -------------------------------------------------------------------------
+
+    renderItems() {
+      this.scroll.innerHTML = "";
+
+      this.videos.forEach((video, index) => {
+        const item = this.createItem(video, index);
+
+        this.scroll.appendChild(item);
+      });
     }
 
-    btn.addEventListener("click", handleToggleClick);
-    window.addEventListener("message", handlePlayerMessage);
-    iframe.addEventListener("load", () => subscribeToPlayer(iframe));
+    createItem(video, index) {
+      const item = document.createElement("div");
 
-    renderItems();
+      item.className =
+        "ytp-item" + (index === this.currentIndex ? " is-active" : "");
+
+      item.setAttribute("role", "button");
+      item.setAttribute("tabindex", "0");
+      item.setAttribute("aria-label", video.title);
+
+      item.innerHTML = `
+      <div class="ytp-thumb">
+        <img
+          src="${video.thumbnailUrl}"
+          alt=""
+          loading="lazy"
+          onerror="this.style.opacity=0"
+        >
+
+        <div class="ytp-thumb-num">
+          ${index + 1}
+        </div>
+      </div>
+
+      <div class="ytp-item-info">
+        <div class="ytp-item-title">
+          ${video.title}
+        </div>
+
+        <div class="ytp-item-ch">
+          ${video.channel || ""}
+        </div>
+
+        <div class="ytp-playing">
+          <div class="ytp-bars">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+
+          Now playing
+        </div>
+      </div>
+    `;
+
+      item.addEventListener("click", () => this.activate(index));
+
+      item.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          this.activate(index);
+        }
+      });
+
+      return item;
+    }
+
+    activate(index) {
+      this.currentIndex = index;
+
+      this.playVideoAt(index);
+
+      this.renderItems();
+
+      this.scrollToActiveItem();
+    }
+
+    playVideoAt(index) {
+      sendPlayVideoAt(this.iframe, index);
+    }
+
+    scrollToActiveItem() {
+      this.scroll
+        .querySelectorAll(".ytp-item")
+        [this.currentIndex]?.scrollIntoView({
+          block: "nearest",
+          behavior: "smooth"
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Cleanup
+    // -------------------------------------------------------------------------
+
+    destroy() {
+      window.removeEventListener("message", this._onMessage);
+
+      this.iframe.removeEventListener("load", this._onIframeLoad);
+
+      this.panel?.remove();
+      this.wrapper?.remove();
+
+      this.iframe.removeAttribute("data-ytp-wrapped");
+    }
   }
 
-  // ---------------------------------------------------------------------------
-  // Main class
-  // ---------------------------------------------------------------------------
-
   class YTPlaylist {
-    static VERSION = "1.0.4";
+    static VERSION = "1.0.5";
 
     constructor(options = {}) {
       if (!options.apiKey) {
-        Logger.error("[YTPlaylistWidget] options.apiKey is required.");
+        Logger.error("[YTPlaylist] options.apiKey is required.");
         return;
       }
       this._apiKey = options.apiKey;
@@ -718,6 +937,7 @@
       this._styleId = `ytp-style-${Math.random().toString(36).slice(2, 9)}`;
       this._initialized = false;
 
+      this._frames = [];
       this._init();
     }
 
@@ -734,67 +954,47 @@
         await this.scan();
       }
     }
-
     async scan() {
       if (this._scanning) return;
       this._scanning = true;
 
-      const root = this._resolveScope();
-      const frames = this._queryIframes(root);
+      const root = resolveScope(this._scope);
+      const frames = queryYouTubeIframes(root);
 
       for (const iframe of frames) {
         try {
-          const videos = await resolveVideosForIframe(iframe, this._apiKey);
+          const videos = await getVideosFromEmbedSrc(iframe.src, this._apiKey);
           if (videos.length > 0) {
+            let startIndex = getStartIndexFromIframe(iframe.src);
+            startIndex = normalizeStartIndex(startIndex);
+
             this._onVideosFound?.({
               videos,
               iframe,
-              isFirstScan: this.isFirstScan
+              startIndex
             });
-            attachPanel(iframe, videos, this._themeVars);
+
+            // post message api
+            ensureIframeHasJsApiEnabled(iframe);
+
+            const instance = new FrameWithPlaylist(
+              iframe,
+              videos,
+              startIndex,
+              this._themeVars
+            );
+            this._frames.push(instance);
           }
         } catch (err) {
-          Logger.error("[YTPlaylistWidget] scan error:", err);
+          Logger.error("[YTPlaylist] scan error:", err);
           this._onError?.(err, iframe);
         }
       }
 
-      this.isFirstScan = false;
       this._scanning = false;
-    }
-
-    _resolveScope() {
-      if (!this._scope) return document;
-      const el = document.querySelector(this._scope);
-      if (!el)
-        Logger.warn(
-          `[YTPlaylistWidget] scope "${this._scope}" not found, falling back to document.`
-        );
-      return el ?? document;
-    }
-
-    /** Returns all YouTube embed iframes that haven't been processed yet. */
-    _queryIframes(root) {
-      return root.querySelectorAll(
-        'iframe[src*="youtube.com/embed"]:not([data-ytp-wrapped])'
-      );
     }
   }
 
-  YTPlaylist.__internals = {
-    Cache,
-    getVideoIdsFromParam,
-    fetchVideosByIdsNoKey,
-    resolveVideosForIframe,
-    parseIndexParam,
-    toZeroBasedIndex,
-    clampIndex,
-    getStartIndexFromIframe,
-    isMessageFromPlayer,
-    parsePlayerMessageData,
-    readPlayerMessage,
-    extractPlaylistIndex
-  };
-
   return YTPlaylist;
-});
+
+}));

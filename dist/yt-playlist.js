@@ -919,7 +919,7 @@
   }
 
   class YTPlaylist {
-    static VERSION = "1.0.5";
+    static VERSION = "1.0.6";
 
     constructor(options = {}) {
       if (!options.apiKey) {
@@ -963,6 +963,10 @@
 
       for (const iframe of frames) {
         try {
+          if (this.iframe.hasAttribute("data-ytp-wrapped")) {
+            continue;
+          }
+
           const videos = await getVideosFromEmbedSrc(iframe.src, this._apiKey);
           if (videos.length > 0) {
             let startIndex = getStartIndexFromIframe(iframe.src);

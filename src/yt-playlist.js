@@ -588,7 +588,7 @@ class FrameWithPlaylist {
 }
 
 class YTPlaylist {
-  static VERSION = "1.0.6";
+  static VERSION = "1.0.7";
 
   constructor(options = {}) {
     if (!options.apiKey) {
@@ -632,7 +632,7 @@ class YTPlaylist {
 
     for (const iframe of frames) {
       try {
-        if (this.iframe.hasAttribute("data-ytp-wrapped")) {
+        if (iframe.hasAttribute("data-ytp-wrapped")) {
           continue;
         }
 

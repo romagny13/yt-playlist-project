@@ -963,7 +963,7 @@
 
       for (const iframe of frames) {
         try {
-          if (this.iframe.hasAttribute("data-ytp-wrapped")) {
+          if (iframe.hasAttribute("data-ytp-wrapped")) {
             continue;
           }
 

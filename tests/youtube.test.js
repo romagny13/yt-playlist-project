@@ -1,6 +1,7 @@
 // youtube.test.js
 
 import { jest } from "@jest/globals";
+import { createCache } from "../src/cache.js";
 import {
     buildFallbackVideos,
   fetchVideoIdsFromPlaylist,
@@ -391,9 +392,12 @@ describe("buildFallbackVideos", () => {
 });
 
 describe("getVideosFromEmbedSrc", () => {
+  let cache;
+
   beforeEach(() => {
     global.fetch = jest.fn();
-    localStorage.clear();
+    // Cache simple en mémoire (suffisant pour les tests)
+    cache = new Map();
   });
 
   afterEach(() => {
@@ -401,7 +405,7 @@ describe("getVideosFromEmbedSrc", () => {
   });
 
   it("retourne un tableau vide si src n'est pas un embed reconnu", async () => {
-    const result = await getVideosFromEmbedSrc("https://example.com", "API_KEY");
+    const result = await getVideosFromEmbedSrc("https://example.com", "API_KEY", cache);
     expect(result).toEqual([]);
     expect(global.fetch).not.toHaveBeenCalled();
   });
@@ -410,7 +414,9 @@ describe("getVideosFromEmbedSrc", () => {
     global.fetch
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ items: [{ contentDetails: { videoId: "id1" } }] }),
+        json: async () => ({
+          items: [{ contentDetails: { videoId: "id1" } }],
+        }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -426,7 +432,7 @@ describe("getVideosFromEmbedSrc", () => {
       });
 
     const src = "https://www.youtube.com/embed/videoseries?list=PLxyz";
-    const result = await getVideosFromEmbedSrc(src, "API_KEY");
+    const result = await getVideosFromEmbedSrc(src, "API_KEY", cache);
 
     expect(result).toEqual([
       { id: "id1", title: "Titre 1", channelTitle: "", thumbnailUrl: "" },
@@ -448,7 +454,7 @@ describe("getVideosFromEmbedSrc", () => {
     });
 
     const src = "https://www.youtube.com/embed?playlist=idA";
-    const result = await getVideosFromEmbedSrc(src, "API_KEY");
+    const result = await getVideosFromEmbedSrc(src, "API_KEY", cache);
 
     expect(result[0].id).toBe("idA");
     expect(global.fetch).toHaveBeenCalledTimes(1); // pas d'appel playlistItems
@@ -456,56 +462,91 @@ describe("getVideosFromEmbedSrc", () => {
 
   it("retourne les résultats du cache sans appeler fetch", async () => {
     const src = "https://www.youtube.com/embed?playlist=idA";
+
     global.fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        items: [{ id: "idA", snippet: { title: "Titre A", thumbnails: {} }, status: { privacyStatus: "public" } }],
+        items: [
+          {
+            id: "idA",
+            snippet: { title: "Titre A", thumbnails: {} },
+            status: { privacyStatus: "public" },
+          },
+        ],
       }),
     });
 
-    await getVideosFromEmbedSrc(src, "API_KEY"); // remplit le cache
+    await getVideosFromEmbedSrc(src, "API_KEY", cache); // remplit le cache
     global.fetch.mockClear();
 
-    const result = await getVideosFromEmbedSrc(src, "API_KEY");
+    const result = await getVideosFromEmbedSrc(src, "API_KEY", cache);
 
     expect(result[0].id).toBe("idA");
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it("retombe sur le fallback si l'API échoue mais que des videoIds sont connus", async () => {
-    global.fetch.mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" });
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+    });
 
     const src = "https://www.youtube.com/embed?playlist=idA,idB";
-    const result = await getVideosFromEmbedSrc(src, "API_KEY");
+    const result = await getVideosFromEmbedSrc(src, "API_KEY", cache);
 
     expect(result).toEqual([
-      { id: "idA", title: "Vidéo 1", channelTitle: "", thumbnailUrl: "https://img.youtube.com/vi/idA/mqdefault.jpg" },
-      { id: "idB", title: "Vidéo 2", channelTitle: "", thumbnailUrl: "https://img.youtube.com/vi/idB/mqdefault.jpg" },
+      {
+        id: "idA",
+        title: "Vidéo 1",
+        channelTitle: "",
+        thumbnailUrl: "https://img.youtube.com/vi/idA/mqdefault.jpg",
+      },
+      {
+        id: "idB",
+        title: "Vidéo 2",
+        channelTitle: "",
+        thumbnailUrl: "https://img.youtube.com/vi/idB/mqdefault.jpg",
+      },
     ]);
   });
 
   it("retourne un tableau vide si l'API échoue avant même d'avoir des videoIds (playlist)", async () => {
-    global.fetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: "Server Error" });
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: "Server Error",
+    });
 
     const src = "https://www.youtube.com/embed/videoseries?list=PLxyz";
-    const result = await getVideosFromEmbedSrc(src, "API_KEY");
+    const result = await getVideosFromEmbedSrc(src, "API_KEY", cache);
 
     expect(result).toEqual([]);
   });
 
   it("ne met pas en cache un résultat vide", async () => {
-    global.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [] }) });
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    });
 
     const src = "https://www.youtube.com/embed?playlist=idA";
-    await getVideosFromEmbedSrc(src, "API_KEY");
+    await getVideosFromEmbedSrc(src, "API_KEY", cache);
+
     global.fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        items: [{ id: "idA", snippet: { title: "Titre A", thumbnails: {} }, status: { privacyStatus: "public" } }],
+        items: [
+          {
+            id: "idA",
+            snippet: { title: "Titre A", thumbnails: {} },
+            status: { privacyStatus: "public" },
+          },
+        ],
       }),
     });
 
-    const result = await getVideosFromEmbedSrc(src, "API_KEY");
+    const result = await getVideosFromEmbedSrc(src, "API_KEY", cache);
 
     expect(global.fetch).toHaveBeenCalledTimes(2); // pas de hit cache la 2e fois
     expect(result[0].id).toBe("idA");

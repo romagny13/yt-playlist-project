@@ -1,6 +1,13 @@
+import { createCache } from "./cache";
 import { resolveScope, queryYouTubeIframes } from "./dom";
 import { Logger } from "./Logger";
 import { getStartIndexFromIframe, getVideosFromEmbedSrc } from "./youtube";
+import {
+  ensureIframeHasJsApiEnabled,
+  subscribeToPlayer,
+  sendPlayVideoAt,
+  normalizeStartIndex
+} from "./player-messaging.js";
 
 // ---------------------------------------------------------------------------
 // Default theme
@@ -218,41 +225,6 @@ function injectGlobalCSS(css, styleId) {
   document.head.appendChild(el);
 }
 
-// ---------------------------------------------------------------------------
-// Player Messaging
-// ---------------------------------------------------------------------------
-
-function ensureIframeHasJsApiEnabled(iframe) {
-  const srcUrl = new URL(iframe.src);
-  const needsUpdate =
-    !srcUrl.searchParams.get("enablejsapi") ||
-    srcUrl.searchParams.get("origin") !== location.origin;
-  iframe.setAttribute("data-original-src", iframe.src);
-  if (needsUpdate) {
-    srcUrl.searchParams.set("enablejsapi", "1");
-    srcUrl.searchParams.set("origin", location.origin);
-    iframe.src = srcUrl.toString();
-  }
-}
-
-function subscribeToPlayer(iframe) {
-  iframe.contentWindow?.postMessage(
-    JSON.stringify({ event: "listening" }),
-    "*"
-  );
-}
-
-function sendPlayVideoAt(iframe, index) {
-  iframe.contentWindow?.postMessage(
-    JSON.stringify({ event: "command", func: "playVideoAt", args: [index] }),
-    "*"
-  );
-}
-
-function normalizeStartIndex(startIndex) {
-  return startIndex > 0 ? startIndex - 1 : 0;
-}
-
 class FrameWithPlaylist {
   constructor(iframe, videos, startIndex, themeVars) {
     this.iframe = iframe;
@@ -303,10 +275,10 @@ class FrameWithPlaylist {
     if (this.isAbsolute) {
       this.wrapper.style.cssText +=
         `position:absolute;` +
-        `top:${this.iframeStyle.top};` +
-        `left:${this.iframeStyle.left};` +
-        `width:${this.iframeStyle.width};` +
-        `height:${this.iframeStyle.height};`;
+        `top:0;` +
+        `left:0;` +
+        `width:100%;` +
+        `height:100%;`;
 
       this.iframe.style.position = "relative";
       this.iframe.style.width = "100%";
@@ -320,11 +292,16 @@ class FrameWithPlaylist {
 
     const placeholder = document.createElement("div");
 
-    placeholder.style.cssText =
-      `width:${this.iframeStyle.width};` +
-      `height:${this.iframeStyle.height};` +
-      `background:#000;` +
-      `display:block;`;
+    if (this.isAbsolute) {
+      placeholder.style.cssText =
+        `width:100%;` + `height:100%;` + `background:#000;` + `display:block;`;
+    } else {
+      placeholder.style.cssText =
+        `width:${this.iframeStyle.width};` +
+        `height:${this.iframeStyle.height};` +
+        `background:#000;` +
+        `display:block;`;
+    }
 
     this.parent.insertBefore(this.wrapper, this.iframe);
     this.wrapper.appendChild(placeholder);
@@ -409,7 +386,8 @@ class FrameWithPlaylist {
       `${this.themeVars}width:${this.iframeStyle.width}`
     );
 
-    this.parent.insertBefore(this.panel, this.wrapper.nextSibling);
+    // au lieu de : this.parent.insertBefore(this.panel, this.wrapper.nextSibling);
+    this.parent.parentNode.insertBefore(this.panel, this.parent.nextSibling);
   }
 
   // -------------------------------------------------------------------------
@@ -429,7 +407,11 @@ class FrameWithPlaylist {
   }
 
   _onMessage(e) {
-    if (!e.origin.includes("youtube.com")) return;
+    const ALLOWED_ORIGINS = [
+      "https://www.youtube.com",
+      "https://www.youtube-nocookie.com"
+    ];
+    if (!ALLOWED_ORIGINS.includes(e.origin)) return;
     if (e.source !== this.iframe.contentWindow) return;
 
     try {
@@ -522,7 +504,7 @@ class FrameWithPlaylist {
         </div>
 
         <div class="ytp-item-ch">
-          ${video.channel || ""}
+          ${video.channelTitle || ""}
         </div>
 
         <div class="ytp-playing">
@@ -588,7 +570,7 @@ class FrameWithPlaylist {
 }
 
 class YTPlaylist {
-  static VERSION = "1.0.8";
+  static VERSION = "1.0.9";
 
   constructor(options = {}) {
     if (!options.apiKey) {
@@ -601,6 +583,8 @@ class YTPlaylist {
     this._themeVars = buildThemeVars(options.theme ?? {});
     this._onVideosFound = options.onVideosFound ?? null;
     this._onError = options.onError ?? null;
+
+    this._cache = options.cache ?? createCache({ prefix: "ytp_" });
 
     // Unique style tag ID — allows multiple widget instances on the same page
     this._styleId = `ytp-style-${Math.random().toString(36).slice(2, 9)}`;
@@ -627,6 +611,8 @@ class YTPlaylist {
     if (this._scanning) return;
     this._scanning = true;
 
+    this._cleanupOrphans();
+
     const root = resolveScope(this._scope);
     const frames = queryYouTubeIframes(root);
 
@@ -636,7 +622,11 @@ class YTPlaylist {
           continue;
         }
 
-        const videos = await getVideosFromEmbedSrc(iframe.src, this._apiKey);
+        const videos = await getVideosFromEmbedSrc(
+          iframe.src,
+          this._apiKey,
+          this._cache
+        );
         if (videos.length > 0) {
           let startIndex = getStartIndexFromIframe(iframe.src);
           startIndex = normalizeStartIndex(startIndex);
@@ -665,6 +655,16 @@ class YTPlaylist {
     }
 
     this._scanning = false;
+  }
+
+  _cleanupOrphans() {
+    this._frames = this._frames.filter((frame) => {
+      const stillInDom = document.body.contains(frame.iframe);
+      if (!stillInDom) {
+        frame.destroy(); // supprime panel + wrapper + listeners orphelins
+      }
+      return stillInDom;
+    });
   }
 }
 

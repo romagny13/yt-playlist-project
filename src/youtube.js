@@ -1,10 +1,7 @@
 // youtube.js
 
 import { isString } from "./utils";
-import { createCache } from "./cache";
 import { Logger } from "./Logger";
-
-const videoCache = createCache({ prefix: "ytp_" });
 
 const YOUTUBE_EMBED_PATH = "youtube.com/embed";
 
@@ -179,18 +176,18 @@ function resolveEmbedSource(src) {
   return null;
 }
 
-export async function getVideosFromEmbedSrc(src, apiKey) {
+export async function getVideosFromEmbedSrc(src, apiKey, cache) {
   const source = resolveEmbedSource(src);
   if (!source) return [];
 
-  const cached = videoCache.get(source.cacheKey);
+  const cached = cache.get(source.cacheKey);
   if (cached) return cached;
 
   let videoIds = [];
   try {
     videoIds = await source.getVideoIds(apiKey);
     const videos = await fetchVideosByIds(videoIds, apiKey);
-    if (videos.length > 0) videoCache.set(source.cacheKey, videos);
+    if (videos.length > 0) cache.set(source.cacheKey, videos);
     return videos;
   } catch (error) {
     Logger.warn(

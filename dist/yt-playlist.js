@@ -4,56 +4,6 @@
   (global = typeof globalThis !== 'undefined' ? globalThis : global || self, global.YTPlaylist = factory());
 })(this, (function () { 'use strict';
 
-  function isString(value) {
-    return typeof value === "string";
-  }
-
-  // src/dom.js
-
-
-  /**
-   * Résout le scope DOM.
-   * - undefined / null → document
-   * - string → document.querySelector(selector)
-   * - HTMLElement / Element → retourne l’élément tel quel
-   */
-  function resolveScope(scope) {
-    if (scope == null) {
-      return document;
-    }
-
-    if (isString(scope)) {
-      const element = document.querySelector(scope);
-      if (!element) {
-        throw new Error(
-          `[YTPlaylist] Element not found for selector: "${scope}"`
-        );
-      }
-      return element;
-    }
-
-    // On considère que c’est déjà un élément DOM
-    return scope;
-  }
-
-  /**
-   * Récupère toutes les iframes YouTube dans un scope donné.
-   * @param {ParentNode} root - Element ou Document
-   * @returns {HTMLIFrameElement[]}
-   */
-  function queryYouTubeIframes(root = document) {
-    if (!root || typeof root.querySelectorAll !== "function") {
-      return [];
-    }
-
-    // Plus robuste : youtube.com + youtube-nocookie.com + différents formats d'embed
-    const selector =
-      'iframe[src*="youtube.com/embed"], iframe[src*="youtube-nocookie.com/embed"]';
-
-    // On convertit en vrai Array (plus pratique)
-    return Array.from(root.querySelectorAll(selector));
-  }
-
   class Logger {
     static _enabled = true;
 
@@ -133,10 +83,58 @@
     };
   }
 
+  function isString(value) {
+    return typeof value === "string";
+  }
+
+  // src/dom.js
+
+
+  /**
+   * Résout le scope DOM.
+   * - undefined / null → document
+   * - string → document.querySelector(selector)
+   * - HTMLElement / Element → retourne l’élément tel quel
+   */
+  function resolveScope(scope) {
+    if (scope == null) {
+      return document;
+    }
+
+    if (isString(scope)) {
+      const element = document.querySelector(scope);
+      if (!element) {
+        throw new Error(
+          `[YTPlaylist] Element not found for selector: "${scope}"`
+        );
+      }
+      return element;
+    }
+
+    // On considère que c’est déjà un élément DOM
+    return scope;
+  }
+
+  /**
+   * Récupère toutes les iframes YouTube dans un scope donné.
+   * @param {ParentNode} root - Element ou Document
+   * @returns {HTMLIFrameElement[]}
+   */
+  function queryYouTubeIframes(root = document) {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return [];
+    }
+
+    // Plus robuste : youtube.com + youtube-nocookie.com + différents formats d'embed
+    const selector =
+      'iframe[src*="youtube.com/embed"], iframe[src*="youtube-nocookie.com/embed"]';
+
+    // On convertit en vrai Array (plus pratique)
+    return Array.from(root.querySelectorAll(selector));
+  }
+
   // youtube.js
 
-
-  const videoCache = createCache({ prefix: "ytp_" });
 
   const YOUTUBE_EMBED_PATH = "youtube.com/embed";
 
@@ -311,18 +309,18 @@
     return null;
   }
 
-  async function getVideosFromEmbedSrc(src, apiKey) {
+  async function getVideosFromEmbedSrc(src, apiKey, cache) {
     const source = resolveEmbedSource(src);
     if (!source) return [];
 
-    const cached = videoCache.get(source.cacheKey);
+    const cached = cache.get(source.cacheKey);
     if (cached) return cached;
 
     let videoIds = [];
     try {
       videoIds = await source.getVideoIds(apiKey);
       const videos = await fetchVideosByIds(videoIds, apiKey);
-      if (videos.length > 0) videoCache.set(source.cacheKey, videos);
+      if (videos.length > 0) cache.set(source.cacheKey, videos);
       return videos;
     } catch (error) {
       Logger.warn(
@@ -331,6 +329,43 @@
       );
       return videoIds.length > 0 ? buildFallbackVideos(videoIds) : [];
     }
+  }
+
+  function computeJsApiSrc(currentSrc, origin) {
+    const url = new URL(currentSrc);
+    if (
+      !url.searchParams.get("enablejsapi") ||
+      url.searchParams.get("origin") !== origin
+    ) {
+      url.searchParams.set("enablejsapi", "1");
+      url.searchParams.set("origin", origin);
+      return url.toString();
+    }
+    return currentSrc;
+  }
+
+  function ensureIframeHasJsApiEnabled(iframe) {
+    iframe.setAttribute("data-original-src", iframe.src);
+    const newSrc = computeJsApiSrc(iframe.src, location.origin);
+    if (newSrc !== iframe.src) iframe.src = newSrc;
+  }
+
+  function subscribeToPlayer(iframe) {
+    iframe.contentWindow?.postMessage(
+      JSON.stringify({ event: "listening" }),
+      "*"
+    );
+  }
+
+  function sendPlayVideoAt(iframe, index) {
+    iframe.contentWindow?.postMessage(
+      JSON.stringify({ event: "command", func: "playVideoAt", args: [index] }),
+      "*"
+    );
+  }
+
+  function normalizeStartIndex(startIndex) {
+    return startIndex > 0 ? startIndex - 1 : 0;
   }
 
   // ---------------------------------------------------------------------------
@@ -549,41 +584,6 @@
     document.head.appendChild(el);
   }
 
-  // ---------------------------------------------------------------------------
-  // Player Messaging
-  // ---------------------------------------------------------------------------
-
-  function ensureIframeHasJsApiEnabled(iframe) {
-    const srcUrl = new URL(iframe.src);
-    const needsUpdate =
-      !srcUrl.searchParams.get("enablejsapi") ||
-      srcUrl.searchParams.get("origin") !== location.origin;
-    iframe.setAttribute("data-original-src", iframe.src);
-    if (needsUpdate) {
-      srcUrl.searchParams.set("enablejsapi", "1");
-      srcUrl.searchParams.set("origin", location.origin);
-      iframe.src = srcUrl.toString();
-    }
-  }
-
-  function subscribeToPlayer(iframe) {
-    iframe.contentWindow?.postMessage(
-      JSON.stringify({ event: "listening" }),
-      "*"
-    );
-  }
-
-  function sendPlayVideoAt(iframe, index) {
-    iframe.contentWindow?.postMessage(
-      JSON.stringify({ event: "command", func: "playVideoAt", args: [index] }),
-      "*"
-    );
-  }
-
-  function normalizeStartIndex(startIndex) {
-    return startIndex > 0 ? startIndex - 1 : 0;
-  }
-
   class FrameWithPlaylist {
     constructor(iframe, videos, startIndex, themeVars) {
       this.iframe = iframe;
@@ -634,10 +634,10 @@
       if (this.isAbsolute) {
         this.wrapper.style.cssText +=
           `position:absolute;` +
-          `top:${this.iframeStyle.top};` +
-          `left:${this.iframeStyle.left};` +
-          `width:${this.iframeStyle.width};` +
-          `height:${this.iframeStyle.height};`;
+          `top:0;` +
+          `left:0;` +
+          `width:100%;` +
+          `height:100%;`;
 
         this.iframe.style.position = "relative";
         this.iframe.style.width = "100%";
@@ -651,11 +651,16 @@
 
       const placeholder = document.createElement("div");
 
-      placeholder.style.cssText =
-        `width:${this.iframeStyle.width};` +
-        `height:${this.iframeStyle.height};` +
-        `background:#000;` +
-        `display:block;`;
+      if (this.isAbsolute) {
+        placeholder.style.cssText =
+          `width:100%;` + `height:100%;` + `background:#000;` + `display:block;`;
+      } else {
+        placeholder.style.cssText =
+          `width:${this.iframeStyle.width};` +
+          `height:${this.iframeStyle.height};` +
+          `background:#000;` +
+          `display:block;`;
+      }
 
       this.parent.insertBefore(this.wrapper, this.iframe);
       this.wrapper.appendChild(placeholder);
@@ -740,7 +745,8 @@
         `${this.themeVars}width:${this.iframeStyle.width}`
       );
 
-      this.parent.insertBefore(this.panel, this.wrapper.nextSibling);
+      // au lieu de : this.parent.insertBefore(this.panel, this.wrapper.nextSibling);
+      this.parent.parentNode.insertBefore(this.panel, this.parent.nextSibling);
     }
 
     // -------------------------------------------------------------------------
@@ -760,7 +766,11 @@
     }
 
     _onMessage(e) {
-      if (!e.origin.includes("youtube.com")) return;
+      const ALLOWED_ORIGINS = [
+        "https://www.youtube.com",
+        "https://www.youtube-nocookie.com"
+      ];
+      if (!ALLOWED_ORIGINS.includes(e.origin)) return;
       if (e.source !== this.iframe.contentWindow) return;
 
       try {
@@ -853,7 +863,7 @@
         </div>
 
         <div class="ytp-item-ch">
-          ${video.channel || ""}
+          ${video.channelTitle || ""}
         </div>
 
         <div class="ytp-playing">
@@ -919,7 +929,7 @@
   }
 
   class YTPlaylist {
-    static VERSION = "1.0.8";
+    static VERSION = "1.0.9";
 
     constructor(options = {}) {
       if (!options.apiKey) {
@@ -932,6 +942,8 @@
       this._themeVars = buildThemeVars(options.theme ?? {});
       this._onVideosFound = options.onVideosFound ?? null;
       this._onError = options.onError ?? null;
+
+      this._cache = options.cache ?? createCache({ prefix: "ytp_" });
 
       // Unique style tag ID — allows multiple widget instances on the same page
       this._styleId = `ytp-style-${Math.random().toString(36).slice(2, 9)}`;
@@ -958,6 +970,8 @@
       if (this._scanning) return;
       this._scanning = true;
 
+      this._cleanupOrphans();
+
       const root = resolveScope(this._scope);
       const frames = queryYouTubeIframes(root);
 
@@ -967,7 +981,11 @@
             continue;
           }
 
-          const videos = await getVideosFromEmbedSrc(iframe.src, this._apiKey);
+          const videos = await getVideosFromEmbedSrc(
+            iframe.src,
+            this._apiKey,
+            this._cache
+          );
           if (videos.length > 0) {
             let startIndex = getStartIndexFromIframe(iframe.src);
             startIndex = normalizeStartIndex(startIndex);
@@ -996,6 +1014,16 @@
       }
 
       this._scanning = false;
+    }
+
+    _cleanupOrphans() {
+      this._frames = this._frames.filter((frame) => {
+        const stillInDom = document.body.contains(frame.iframe);
+        if (!stillInDom) {
+          frame.destroy(); // supprime panel + wrapper + listeners orphelins
+        }
+        return stillInDom;
+      });
     }
   }
 

@@ -548,12 +548,12 @@ class FrameWithPlaylist {
     sendPlayVideoAt(this.iframe, index);
   }
 
-  scrollToActiveItem() {
+  scrollToActiveItem(behavior = "smooth") {
     this.scroll
       .querySelectorAll(".ytp-item")
     [this.currentIndex]?.scrollIntoView({
-      block: "nearest",
-      behavior: "smooth"
+      block: "center",
+      behavior
     });
   }
 
@@ -574,7 +574,7 @@ class FrameWithPlaylist {
 }
 
 class YTPlaylist {
-  static VERSION = "1.0.10";
+  static VERSION = "1.0.11";
 
   constructor(options = {}) {
     if (!options.apiKey) {

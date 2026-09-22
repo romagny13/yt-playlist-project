@@ -420,7 +420,7 @@ class FrameWithPlaylist {
       if (data.event === "infoDelivery" && data.info?.playerState === 1) {
         this._handlePlaying(data.info);
       }
-    } catch {}
+    } catch { }
   }
 
   _handlePlaying(info) {
@@ -458,7 +458,11 @@ class FrameWithPlaylist {
     this.toggleButton.classList.toggle("is-active", this.isPanelOpen);
 
     this.toggleButton.setAttribute("aria-expanded", String(this.isPanelOpen));
+
+    if (this.isPanelOpen) this.scrollToActiveItem();
   }
+
+
 
   // -------------------------------------------------------------------------
   // Playlist
@@ -547,10 +551,10 @@ class FrameWithPlaylist {
   scrollToActiveItem() {
     this.scroll
       .querySelectorAll(".ytp-item")
-      [this.currentIndex]?.scrollIntoView({
-        block: "nearest",
-        behavior: "smooth"
-      });
+    [this.currentIndex]?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth"
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -570,7 +574,7 @@ class FrameWithPlaylist {
 }
 
 class YTPlaylist {
-  static VERSION = "1.0.9";
+  static VERSION = "1.0.10";
 
   constructor(options = {}) {
     if (!options.apiKey) {
